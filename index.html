@@ -7,6 +7,10 @@
     <title>PGNome: Isometric Evolution</title>
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <!-- Open Source Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
 </head>
 
 <body>
@@ -51,8 +55,8 @@
             <button id="btn-spawn" class="action-btn">Spawn Random Couple</button>
         </div>
     </div>
-
-    <canvas id="gameCanvas"></canvas>
+    
+    <div id="game-container"></div>
     <script src="app.js"></script>
 </body>
 

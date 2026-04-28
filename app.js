@@ -1,16 +1,14 @@
 // --- CONFIG & UTILS ---
 const MAP_SIZE = 30;
-const TILE_W = 64;
-const TILE_H = 32;
-const ELEVATION_STEP = 10;
+const TILE_SIZE = 1;
 
 const BIOMES = {
-    WATER: { id: 'water', name: 'Water', top: '#3b82f6', left: '#2563eb', right: '#1d4ed8', moisture: 100, temp: 40, light: 80, height: 0 },
-    SAND: { id: 'sand', name: 'Sand', top: '#fcd34d', left: '#fbbf24', right: '#f59e0b', moisture: 10, temp: 80, light: 100, height: 1 },
-    GRASS: { id: 'grass', name: 'Meadow', top: '#4ade80', left: '#22c55e', right: '#16a34a', moisture: 50, temp: 60, light: 90, height: 2 },
-    MUD: { id: 'mud', name: 'Mud', top: '#92400e', left: '#78350f', right: '#451a03', moisture: 80, temp: 50, light: 80, height: 1 },
-    FOREST: { id: 'forest', name: 'Forest', top: '#059669', left: '#047857', right: '#065f46', moisture: 60, temp: 50, light: 30, height: 2 },
-    ROCK: { id: 'rock', name: 'Rock', top: '#94a3b8', left: '#64748b', right: '#475569', moisture: 20, temp: 40, light: 90, height: 4 }
+    WATER: { id: 'water', name: 'Water', color: 0x3b82f6, moisture: 100, temp: 40, light: 80, height: 0.2 },
+    SAND: { id: 'sand', name: 'Sand', color: 0xfcd34d, moisture: 10, temp: 80, light: 100, height: 0.8 },
+    GRASS: { id: 'grass', name: 'Meadow', color: 0x4ade80, moisture: 50, temp: 60, light: 90, height: 1.0 },
+    MUD: { id: 'mud', name: 'Mud', color: 0x78350f, moisture: 80, temp: 50, light: 80, height: 0.9 },
+    FOREST: { id: 'forest', name: 'Forest', color: 0x064e3b, moisture: 60, temp: 50, light: 30, height: 1.5 },
+    ROCK: { id: 'rock', name: 'Rock', color: 0x64748b, moisture: 20, temp: 40, light: 90, height: 2.5 }
 };
 
 const STAT_COLORS = {
@@ -20,114 +18,158 @@ const STAT_COLORS = {
     energy: '#3b82f6'
 };
 
-function randomRange(min, max) {
-    return Math.random() * (max - min) + min;
-}
-
-function clamp(val, min, max) {
-    return Math.max(min, Math.min(max, val));
-}
-
-// Simple noise for map generation
-function noise2D(x, y) {
-    return Math.sin(x * 0.3) * Math.cos(y * 0.3) * 0.5 + 0.5;
-}
+function randomRange(min, max) { return Math.random() * (max - min) + min; }
+function clamp(val, min, max) { return Math.max(min, Math.min(max, val)); }
+function noise2D(x, y) { return Math.sin(x * 0.3) * Math.cos(y * 0.3) * 0.5 + 0.5; }
 
 // --- GAME STATE ---
-let canvas, ctx;
-let camera = { x: 0, y: 0, zoom: 1 };
+let scene, camera, renderer, orbitControls, raycaster, mouse;
 let world = [];
+let tileMeshes = [];
 let creatures = [];
 let foods = [];
 let selectedTool = 'inspect';
-let selectedEntity = null; // Can be a creature or a tile {type: 'creature', obj: ...}
+let selectedEntity = null; // {type: 'creature'|'tile', obj: ...}
 let draggedCreature = null;
 let lastTime = 0;
 let generation = 1;
 
 // --- INITIALIZATION ---
 function init() {
-    canvas = document.getElementById('gameCanvas');
-    ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    
+    // Setup Three.js
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x090e17);
+    
+    // Isometric Orthographic Camera
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 15;
+    camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+    camera.position.set(20, 20, 20); // Looking from top-right corner
+    camera.lookAt(MAP_SIZE/2, 0, MAP_SIZE/2);
+    
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+    
+    // Controls
+    orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+    orbitControls.target.set(MAP_SIZE/2, 0, MAP_SIZE/2);
+    orbitControls.enableRotate = true; // Allow user to rotate the isometric view!
+    orbitControls.maxPolarAngle = Math.PI / 2 - 0.1; // Don't go below ground
+    
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(MAP_SIZE, 30, MAP_SIZE/2);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.left = -MAP_SIZE;
+    dirLight.shadow.camera.right = MAP_SIZE;
+    dirLight.shadow.camera.top = MAP_SIZE;
+    dirLight.shadow.camera.bottom = -MAP_SIZE;
+    scene.add(dirLight);
 
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    raycaster = new THREE.Raycaster();
+    mouse = new THREE.Vector2();
 
-    // Center camera
-    camera.x = 0;
-    camera.y = -MAP_SIZE * TILE_H / 2 + window.innerHeight / 2;
-
+    window.addEventListener('resize', onWindowResize);
+    
     generateWorld();
-
-    // Setup UI
+    
     setupTools();
     document.getElementById('btn-spawn').addEventListener('click', () => {
-        spawnCreature(Math.floor(MAP_SIZE / 2), Math.floor(MAP_SIZE / 2));
-        spawnCreature(Math.floor(MAP_SIZE / 2), Math.floor(MAP_SIZE / 2));
+        spawnCreature(Math.floor(MAP_SIZE/2), Math.floor(MAP_SIZE/2));
+        spawnCreature(Math.floor(MAP_SIZE/2), Math.floor(MAP_SIZE/2));
     });
-
-    // Setup Input
+    
     setupInput();
-
-    // Initial Spawn
-    for (let i = 0; i < 5; i++) {
-        spawnCreature(Math.floor(randomRange(5, MAP_SIZE - 5)), Math.floor(randomRange(5, MAP_SIZE - 5)));
+    
+    for(let i=0; i<8; i++) {
+        spawnCreature(randomRange(5, MAP_SIZE-5), randomRange(5, MAP_SIZE-5));
     }
-
+    
     requestAnimationFrame(gameLoop);
 }
 
-function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+function onWindowResize() {
+    const aspect = window.innerWidth / window.innerHeight;
+    const d = 15;
+    camera.left = -d * aspect;
+    camera.right = d * aspect;
+    camera.top = d;
+    camera.bottom = -d;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
 // --- WORLD GENERATION ---
+const tileGeometry = new THREE.BoxGeometry(1, 1, 1);
+// Move geometry origin to bottom so scaling Y doesn't shift the base
+tileGeometry.translate(0, 0.5, 0);
+
 function generateWorld() {
-    world = [];
     for (let x = 0; x < MAP_SIZE; x++) {
         world[x] = [];
-        for (let y = 0; y < MAP_SIZE; y++) {
-            let n = noise2D(x, y);
-            let nMoist = noise2D(x + 100, y + 100);
-
+        tileMeshes[x] = [];
+        for (let z = 0; z < MAP_SIZE; z++) {
+            let n = noise2D(x, z);
+            let nMoist = noise2D(x + 100, z + 100);
+            
             let type = BIOMES.GRASS;
-            let elevation = Math.floor(n * 4);
-
-            if (elevation === 0) type = BIOMES.WATER;
-            else if (elevation === 1) type = nMoist > 0.6 ? BIOMES.MUD : BIOMES.SAND;
-            else if (elevation === 2) type = nMoist > 0.6 ? BIOMES.FOREST : BIOMES.GRASS;
+            let elev = Math.floor(n * 4);
+            
+            if (elev === 0) type = BIOMES.WATER;
+            else if (elev === 1) type = nMoist > 0.6 ? BIOMES.MUD : BIOMES.SAND;
+            else if (elev === 2) type = nMoist > 0.6 ? BIOMES.FOREST : BIOMES.GRASS;
             else type = BIOMES.ROCK;
-
-            world[x][y] = {
-                x: x,
-                y: y,
-                elevation: elevation,
-                biome: type,
-                food: 0
-            };
+            
+            world[x][z] = { x: x, z: z, biome: type };
+            
+            let material = new THREE.MeshStandardMaterial({ color: type.color, roughness: 0.8 });
+            if (type === BIOMES.WATER) {
+                material.transparent = true;
+                material.opacity = 0.8;
+                material.roughness = 0.1;
+                material.metalness = 0.5;
+            }
+            
+            let mesh = new THREE.Mesh(tileGeometry, material);
+            mesh.position.set(x, 0, z);
+            mesh.scale.y = type.height;
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.userData = { isTile: true, x: x, z: z };
+            
+            scene.add(mesh);
+            tileMeshes[x][z] = mesh;
         }
     }
 }
 
 // --- GENETICS & CREATURES ---
+const creatureMaterials = {};
+
 class Creature {
-    constructor(x, y, parents = null) {
+    constructor(x, z, parents = null) {
         this.id = Math.random().toString(36).substr(2, 9);
         this.x = x;
-        this.y = y;
-        this.vx = 0;
-        this.vy = 0;
+        this.z = z;
         this.target = null;
-
+        
         // State
         this.hunger = 100;
         this.happiness = 50;
         this.arousal = 0;
         this.energy = 100;
-        this.age = 0;
-        this.state = 'idle'; // idle, moving, eating, sleeping, mating
-
+        this.state = 'idle';
+        
         // Genetics
         if (parents) {
             this.genes = this.mixGenes(parents[0].genes, parents[1].genes);
@@ -137,10 +179,10 @@ class Creature {
             this.genes = this.randomGenes();
             this.generation = 1;
         }
-
-        this.color = `hsl(${this.genes.hue}, ${this.genes.saturation}%, ${this.genes.lightness}%)`;
+        
+        this.buildMesh();
     }
-
+    
     randomGenes() {
         return {
             hue: Math.floor(randomRange(0, 360)),
@@ -149,22 +191,21 @@ class Creature {
             prefMoisture: randomRange(0, 100),
             prefTemp: randomRange(0, 100),
             prefLight: randomRange(0, 100),
-            sociability: randomRange(0, 100), // How much they want to be near others
-            speed: randomRange(0.5, 2.0),
+            sociability: randomRange(0, 100),
+            speed: randomRange(0.5, 2.5),
             metabolism: randomRange(0.5, 1.5),
-            size: randomRange(0.8, 1.5)
+            size: randomRange(0.6, 1.2)
         };
     }
-
+    
     mixGenes(g1, g2) {
         let child = {};
         for (let key in g1) {
-            // 50% chance from either parent, plus slight mutation
             let val = Math.random() > 0.5 ? g1[key] : g2[key];
             if (key === 'hue') {
                 val += randomRange(-20, 20);
-                if (val < 0) val += 360;
-                if (val > 360) val -= 360;
+                if(val < 0) val += 360;
+                if(val > 360) val -= 360;
             } else {
                 val += randomRange(-10, 10);
             }
@@ -172,474 +213,414 @@ class Creature {
         }
         return child;
     }
-
+    
+    buildMesh() {
+        this.meshGroup = new THREE.Group();
+        this.meshGroup.userData = { isCreature: true, obj: this };
+        
+        let color = new THREE.Color(`hsl(${this.genes.hue}, ${this.genes.saturation}%, ${this.genes.lightness}%)`);
+        let mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.5, metalness: 0.1 });
+        
+        // Base shape depends on preferences
+        let bodyGeo;
+        if (this.genes.prefTemp < 40) {
+            bodyGeo = new THREE.DodecahedronGeometry(0.4 * this.genes.size); // Cold lovers are blocky/chunky
+        } else if (this.genes.prefMoisture > 70) {
+            bodyGeo = new THREE.SphereGeometry(0.4 * this.genes.size, 16, 16); // Water lovers are smooth
+        } else {
+            bodyGeo = new THREE.CylinderGeometry(0.3 * this.genes.size, 0.4 * this.genes.size, 0.6 * this.genes.size, 8); // Normal
+        }
+        
+        this.bodyMesh = new THREE.Mesh(bodyGeo, mat);
+        this.bodyMesh.position.y = 0.4 * this.genes.size;
+        this.bodyMesh.castShadow = true;
+        this.bodyMesh.receiveShadow = true;
+        this.meshGroup.add(this.bodyMesh);
+        
+        // Add features based on skills/likes
+        if (this.genes.speed > 1.5) {
+            // Fast creatures get a streamlined fin or wings
+            let wingGeo = new THREE.ConeGeometry(0.1, 0.5, 4);
+            wingGeo.rotateX(Math.PI/2);
+            let wing = new THREE.Mesh(wingGeo, mat);
+            wing.position.set(0, 0.5 * this.genes.size, -0.3);
+            this.meshGroup.add(wing);
+        }
+        
+        // Eyes based on sociability
+        let eyeSize = this.genes.sociability > 70 ? 0.12 : 0.06;
+        let eyeGeo = new THREE.SphereGeometry(eyeSize, 8, 8);
+        let eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        let pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        
+        let leye = new THREE.Mesh(eyeGeo, eyeMat);
+        leye.position.set(-0.15, 0.5 * this.genes.size, 0.3 * this.genes.size);
+        let lpupil = new THREE.Mesh(new THREE.SphereGeometry(eyeSize*0.5, 8, 8), pupilMat);
+        lpupil.position.set(0, 0, eyeSize*0.8);
+        leye.add(lpupil);
+        this.meshGroup.add(leye);
+        
+        let reye = leye.clone();
+        reye.position.set(0.15, 0.5 * this.genes.size, 0.3 * this.genes.size);
+        this.meshGroup.add(reye);
+        
+        // Emotion Sprite
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        this.emotionCtx = canvas.getContext('2d');
+        const tex = new THREE.CanvasTexture(canvas);
+        const spriteMat = new THREE.SpriteMaterial({ map: tex });
+        this.emotionSprite = new THREE.Sprite(spriteMat);
+        this.emotionSprite.position.y = 1.2 * this.genes.size;
+        this.emotionSprite.scale.set(0.8, 0.8, 1);
+        this.meshGroup.add(this.emotionSprite);
+        
+        // Selection Ring
+        const ringGeo = new THREE.RingGeometry(0.5 * this.genes.size, 0.6 * this.genes.size, 16);
+        ringGeo.rotateX(-Math.PI/2);
+        const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0 });
+        this.selectionRing = new THREE.Mesh(ringGeo, ringMat);
+        this.selectionRing.position.y = 0.05;
+        this.meshGroup.add(this.selectionRing);
+        
+        scene.add(this.meshGroup);
+    }
+    
+    updateEmotion() {
+        this.emotionCtx.clearRect(0,0,64,64);
+        this.emotionCtx.font = '40px Arial';
+        this.emotionCtx.textAlign = 'center';
+        if (this.state === 'sleeping') {
+            this.emotionCtx.fillText('💤', 32, 48);
+        } else if (this.happiness < 30) {
+            this.emotionCtx.fillText('😢', 32, 48);
+        } else if (this.arousal > 80) {
+            this.emotionCtx.fillText('❤️', 32, 48);
+        }
+        this.emotionSprite.material.map.needsUpdate = true;
+    }
+    
     update(dt) {
-        this.age += dt;
+        if (this === draggedCreature) {
+            this.meshGroup.position.set(this.x, 3, this.z); // Lifted up when dragged
+            return;
+        }
 
-        // Get current tile
-        let tx = Math.floor(clamp(this.x, 0, MAP_SIZE - 1));
-        let ty = Math.floor(clamp(this.y, 0, MAP_SIZE - 1));
-        let tile = world[tx] && world[tx][ty];
-
+        let tx = Math.floor(clamp(this.x, 0, MAP_SIZE-1));
+        let tz = Math.floor(clamp(this.z, 0, MAP_SIZE-1));
+        let tile = world[tx] && world[tx][tz];
+        
         if (!tile) return;
+        
+        let groundHeight = tile.biome.height;
+        this.meshGroup.position.set(this.x, groundHeight, this.z);
 
-        // Stat drain
         this.hunger -= 2 * this.genes.metabolism * dt;
         this.energy -= 1 * dt;
-
-        // Calculate environment happiness
+        
         let envScore = 100;
         envScore -= Math.abs(tile.biome.moisture - this.genes.prefMoisture) * 0.3;
         envScore -= Math.abs(tile.biome.temp - this.genes.prefTemp) * 0.3;
         envScore -= Math.abs(tile.biome.light - this.genes.prefLight) * 0.3;
-
-        // Sociability
-        let nearby = creatures.filter(c => c !== this && Math.hypot(c.x - this.x, c.y - this.y) < 5);
+        
+        let nearby = creatures.filter(c => c !== this && Math.hypot(c.x - this.x, c.z - this.z) < 5);
         if (this.genes.sociability > 50 && nearby.length === 0) envScore -= 20;
         if (this.genes.sociability < 30 && nearby.length > 2) envScore -= 20;
-
+        
         this.happiness += (envScore - this.happiness) * dt * 0.5;
         this.happiness = clamp(this.happiness, 0, 100);
-
-        // Arousal increases if happy and full
-        if (this.happiness > 70 && this.hunger > 60) {
-            this.arousal += 5 * dt;
-        } else {
-            this.arousal -= 2 * dt;
-        }
+        
+        if (this.happiness > 70 && this.hunger > 60) this.arousal += 5 * dt;
+        else this.arousal -= 2 * dt;
+        
         this.arousal = clamp(this.arousal, 0, 100);
         this.hunger = clamp(this.hunger, 0, 100);
         this.energy = clamp(this.energy, 0, 100);
 
-        // Sleep
         if (this.energy < 20 || this.state === 'sleeping') {
             this.state = 'sleeping';
             this.energy += 15 * dt;
             if (this.energy > 90) this.state = 'idle';
-            return; // Don't move while sleeping
+            this.updateEmotion();
+            return;
         }
 
-        // Behavior / AI
         if (this.target) {
             let dx = this.target.x - this.x;
-            let dy = this.target.y - this.y;
-            let dist = Math.hypot(dx, dy);
-
+            let dz = this.target.z - this.z;
+            let dist = Math.hypot(dx, dz);
+            
             if (dist < 0.1) {
                 this.x = this.target.x;
-                this.y = this.target.y;
+                this.z = this.target.z;
                 this.target = null;
                 this.state = 'idle';
             } else {
                 this.x += (dx / dist) * this.genes.speed * dt;
-                this.y += (dy / dist) * this.genes.speed * dt;
+                this.z += (dz / dist) * this.genes.speed * dt;
                 this.state = 'moving';
+                
+                // Rotation towards target
+                let angle = Math.atan2(dx, dz);
+                this.meshGroup.rotation.y = angle;
+                
+                // Bouncing animation
+                this.bodyMesh.position.y = 0.4 * this.genes.size + Math.abs(Math.sin(Date.now() * 0.01 * this.genes.speed)) * 0.3;
             }
         } else {
-            // Find a target
+            this.bodyMesh.position.y = 0.4 * this.genes.size; // Reset bounce
+            
             if (this.hunger < 40) {
-                // Find food
                 let bestFood = null;
                 let minDist = Infinity;
                 foods.forEach(f => {
-                    let d = Math.hypot(f.x - this.x, f.y - this.y);
+                    let d = Math.hypot(f.x - this.x, f.z - this.z);
                     if (d < 5 && d < minDist) { minDist = d; bestFood = f; }
                 });
-                if (bestFood) {
-                    this.target = { x: bestFood.x, y: bestFood.y };
-                } else {
-                    this.wander();
-                }
+                if (bestFood) this.target = { x: bestFood.x, z: bestFood.z };
+                else this.wander();
             } else if (this.arousal > 80) {
-                // Find mate
-                let mate = creatures.find(c => c !== this && c.arousal > 80 && Math.hypot(c.x - this.x, c.y - this.y) < 6);
+                let mate = creatures.find(c => c !== this && c.arousal > 80 && Math.hypot(c.x - this.x, c.z - this.z) < 6);
                 if (mate) {
-                    this.target = { x: mate.x, y: mate.y };
-                    // If very close, mate!
-                    if (Math.hypot(mate.x - this.x, mate.y - this.y) < 0.5) {
-                        this.arousal = 0;
-                        mate.arousal = 0;
-                        this.energy -= 30;
-                        mate.energy -= 30;
-                        // Spawn child
+                    this.target = { x: mate.x, z: mate.z };
+                    if (Math.hypot(mate.x - this.x, mate.z - this.z) < 0.5) {
+                        this.arousal = 0; mate.arousal = 0;
+                        this.energy -= 30; mate.energy -= 30;
+                        
+                        // Heart Animation using Tween
+                        new TWEEN.Tween(this.meshGroup.scale)
+                            .to({ x: 1.5, y: 1.5, z: 1.5 }, 300)
+                            .yoyo(true).repeat(1)
+                            .start();
+                            
                         let cx = (this.x + mate.x) / 2;
-                        let cy = (this.y + mate.y) / 2;
-                        let child = new Creature(cx, cy, [this, mate]);
+                        let cz = (this.z + mate.z) / 2;
+                        let child = new Creature(cx, cz, [this, mate]);
                         creatures.push(child);
-
-                        // Particle effect or UI update
                         updateStatsUI();
                     }
                 } else {
                     this.wander();
                 }
             } else if (Math.random() < 0.02) {
-                // Find better environment
-                let searchX = clamp(Math.floor(this.x + randomRange(-3, 3)), 0, MAP_SIZE - 1);
-                let searchY = clamp(Math.floor(this.y + randomRange(-3, 3)), 0, MAP_SIZE - 1);
-                this.target = { x: searchX, y: searchY };
+                let searchX = clamp(Math.floor(this.x + randomRange(-3, 3)), 0, MAP_SIZE-1);
+                let searchZ = clamp(Math.floor(this.z + randomRange(-3, 3)), 0, MAP_SIZE-1);
+                this.target = { x: searchX, z: searchZ };
             }
         }
-
-        // Consume food if on it and hungry
+        
         if (this.hunger < 80) {
             for (let i = foods.length - 1; i >= 0; i--) {
                 let f = foods[i];
-                if (Math.hypot(f.x - this.x, f.y - this.y) < 0.5) {
+                if (Math.hypot(f.x - this.x, f.z - this.z) < 0.5) {
                     this.hunger += 30;
+                    scene.remove(f.mesh);
                     foods.splice(i, 1);
                     break;
                 }
             }
         }
+        
+        this.updateEmotion();
+        
+        // Highlight logic
+        if (selectedEntity && selectedEntity.type === 'creature' && selectedEntity.obj === this) {
+            this.selectionRing.material.opacity = 0.8;
+            this.selectionRing.rotation.z += 2 * dt;
+        } else {
+            this.selectionRing.material.opacity = 0;
+        }
     }
-
+    
     wander() {
         this.target = {
             x: clamp(this.x + randomRange(-2, 2), 0, MAP_SIZE - 1),
-            y: clamp(this.y + randomRange(-2, 2), 0, MAP_SIZE - 1)
+            z: clamp(this.z + randomRange(-2, 2), 0, MAP_SIZE - 1)
         };
     }
 }
 
-// --- ENGINE & RENDER ---
-function mapToIso(mx, my, elevation = 0) {
-    const sx = (mx - my) * (TILE_W / 2);
-    const sy = (mx + my) * (TILE_H / 2) - (elevation * ELEVATION_STEP);
-    return { x: sx, y: sy };
+// --- FOOD ---
+const appleGeo = new THREE.SphereGeometry(0.15, 8, 8);
+const appleMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.2 });
+
+function spawnFood(x, z) {
+    let tx = Math.floor(clamp(x, 0, MAP_SIZE-1));
+    let tz = Math.floor(clamp(z, 0, MAP_SIZE-1));
+    let elev = world[tx][tz].biome.height;
+    
+    let mesh = new THREE.Mesh(appleGeo, appleMat);
+    mesh.position.set(x, elev + 0.15, z);
+    mesh.castShadow = true;
+    scene.add(mesh);
+    foods.push({ x, z, mesh });
 }
 
-// Very basic screen to map estimation for flat clicking
-function screenToMap(sx, sy) {
-    // Reverse iso transform assuming elevation 0
-    // sy = (mx + my) * TILE_H / 2
-    // sx = (mx - my) * TILE_W / 2
-    let mapY = (sy / (TILE_H / 2) - sx / (TILE_W / 2)) / 2;
-    let mapX = (sy / (TILE_H / 2) + sx / (TILE_W / 2)) / 2;
-    return { x: mapX, y: mapY };
-}
-
-function drawTile(x, y, tile) {
-    const { x: sx, y: sy } = mapToIso(x, y, tile.elevation);
-    const halfW = TILE_W / 2;
-    const halfH = TILE_H / 2;
-    const height = tile.elevation * ELEVATION_STEP;
-    const baseH = 10; // base thickness of a tile
-
-    // Top face
-    ctx.fillStyle = tile.biome.top;
-    ctx.beginPath();
-    ctx.moveTo(sx, sy - halfH);
-    ctx.lineTo(sx + halfW, sy);
-    ctx.lineTo(sx, sy + halfH);
-    ctx.lineTo(sx - halfW, sy);
-    ctx.closePath();
-    ctx.fill();
-
-    // Left face
-    ctx.fillStyle = tile.biome.left;
-    ctx.beginPath();
-    ctx.moveTo(sx - halfW, sy);
-    ctx.lineTo(sx, sy + halfH);
-    ctx.lineTo(sx, sy + halfH + baseH);
-    ctx.lineTo(sx - halfW, sy + baseH);
-    ctx.closePath();
-    ctx.fill();
-
-    // Right face
-    ctx.fillStyle = tile.biome.right;
-    ctx.beginPath();
-    ctx.moveTo(sx + halfW, sy);
-    ctx.lineTo(sx, sy + halfH);
-    ctx.lineTo(sx, sy + halfH + baseH);
-    ctx.lineTo(sx + halfW, sy + baseH);
-    ctx.closePath();
-    ctx.fill();
-
-    // Highlight if selected
-    if (selectedEntity && selectedEntity.type === 'tile' && selectedEntity.obj === tile) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy - halfH);
-        ctx.lineTo(sx + halfW, sy);
-        ctx.lineTo(sx, sy + halfH);
-        ctx.lineTo(sx - halfW, sy);
-        ctx.closePath();
-        ctx.stroke();
-    }
-}
-
-function drawCreature(c) {
-    let tileX = Math.floor(clamp(c.x, 0, MAP_SIZE - 1));
-    let tileY = Math.floor(clamp(c.y, 0, MAP_SIZE - 1));
-    let elevation = world[tileX] ? (world[tileX][tileY] ? world[tileX][tileY].elevation : 0) : 0;
-
-    let bounce = 0;
-    if (c.state === 'moving') bounce = Math.abs(Math.sin(Date.now() * 0.01 * c.genes.speed)) * 5;
-    if (c === draggedCreature) { bounce = 20; elevation += 2; }
-
-    const { x: sx, y: sy } = mapToIso(c.x, c.y, elevation);
-
-    let drawY = sy - bounce;
-    let size = 10 * c.genes.size;
-
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(sx, sy, size, size / 2, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Body
-    ctx.fillStyle = c.color;
-    ctx.beginPath();
-    ctx.arc(sx, drawY - size, size, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Eyes
-    ctx.fillStyle = c.state === 'sleeping' ? '#555' : 'white';
-    ctx.beginPath();
-    ctx.arc(sx - size * 0.3, drawY - size * 1.2, size * 0.2, 0, Math.PI * 2);
-    ctx.arc(sx + size * 0.3, drawY - size * 1.2, size * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (c.state !== 'sleeping') {
-        ctx.fillStyle = 'black';
-        ctx.beginPath();
-        ctx.arc(sx - size * 0.3, drawY - size * 1.2, size * 0.1, 0, Math.PI * 2);
-        ctx.arc(sx + size * 0.3, drawY - size * 1.2, size * 0.1, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // Emotion indicator
-    if (c.happiness < 30) {
-        ctx.fillStyle = '#ef4444'; // sad
-        ctx.font = '12px Arial';
-        ctx.fillText('😢', sx - 6, drawY - size * 2.5);
-    } else if (c.arousal > 80) {
-        ctx.fillStyle = '#ec4899'; // love
-        ctx.font = '12px Arial';
-        ctx.fillText('❤️', sx - 6, drawY - size * 2.5);
-    }
-
-    // Selection Ring
-    if (selectedEntity && selectedEntity.type === 'creature' && selectedEntity.obj === c) {
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.ellipse(sx, sy, size * 1.5, size * 0.75, 0, 0, Math.PI * 2);
-        ctx.stroke();
-    }
-}
-
-function drawFood(f) {
-    let tileX = Math.floor(clamp(f.x, 0, MAP_SIZE - 1));
-    let tileY = Math.floor(clamp(f.y, 0, MAP_SIZE - 1));
-    let elevation = world[tileX] ? (world[tileX][tileY] ? world[tileX][tileY].elevation : 0) : 0;
-
-    const { x: sx, y: sy } = mapToIso(f.x, f.y, elevation);
-
-    ctx.fillStyle = '#ef4444'; // Apple red
-    ctx.beginPath();
-    ctx.arc(sx, sy - 5, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = '#22c55e'; // Leaf green
-    ctx.beginPath();
-    ctx.arc(sx + 2, sy - 9, 2, 0, Math.PI * 2);
-    ctx.fill();
-}
-
+// --- ENGINE ---
 function gameLoop(timestamp) {
+    requestAnimationFrame(gameLoop);
+    
     let dt = (timestamp - lastTime) / 1000;
-    if (dt > 0.1) dt = 0.1; // Cap delta
+    if (dt > 0.1) dt = 0.1;
     lastTime = timestamp;
 
-    // Update
-    creatures.forEach(c => {
-        if (c !== draggedCreature) c.update(dt);
-    });
+    TWEEN.update(timestamp);
+    orbitControls.update();
 
-    // Remove dead (optional, if we want them to die, but user said infinite life)
-    // We keep them alive infinitely as requested.
-
-    // World evolution: occasional tile change
+    // World evolution
     if (Math.random() < 0.1 * dt) {
         let x = Math.floor(randomRange(0, MAP_SIZE));
-        let y = Math.floor(randomRange(0, MAP_SIZE));
-        let biomesKeys = Object.keys(BIOMES);
-        let randomBiome = BIOMES[biomesKeys[Math.floor(randomRange(0, biomesKeys.length))]];
-        world[x][y].biome = randomBiome;
-        world[x][y].elevation = randomBiome.height;
-    }
-
-    // Render
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-color');
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.save();
-    ctx.translate(canvas.width / 2 + camera.x, camera.y);
-    ctx.scale(camera.zoom, camera.zoom);
-
-    // Painter's Algorithm: Draw from back to front
-    // Iterate x and y such that x+y is increasing
-    let renderList = [];
-
-    for (let x = 0; x < MAP_SIZE; x++) {
-        for (let y = 0; y < MAP_SIZE; y++) {
-            renderList.push({ type: 'tile', order: x + y, obj: world[x][y] });
+        let z = Math.floor(randomRange(0, MAP_SIZE));
+        let keys = Object.keys(BIOMES);
+        let randomBiome = BIOMES[keys[Math.floor(randomRange(0, keys.length))]];
+        
+        world[x][z].biome = randomBiome;
+        let mesh = tileMeshes[x][z];
+        
+        // Tween the transition for beauty!
+        mesh.material.color.setHex(randomBiome.color);
+        if (randomBiome === BIOMES.WATER) {
+            mesh.material.transparent = true;
+            mesh.material.opacity = 0.8;
+            mesh.material.metalness = 0.5;
+        } else {
+            mesh.material.transparent = false;
+            mesh.material.opacity = 1;
+            mesh.material.metalness = 0.1;
         }
+        
+        new TWEEN.Tween(mesh.scale)
+            .to({ y: randomBiome.height }, 1000)
+            .easing(TWEEN.Easing.Quadratic.Out)
+            .start();
     }
 
-    creatures.forEach(c => {
-        renderList.push({ type: 'creature', order: c.x + c.y, obj: c });
-    });
+    creatures.forEach(c => c.update(dt));
 
-    foods.forEach(f => {
-        renderList.push({ type: 'food', order: f.x + f.y, obj: f });
-    });
-
-    renderList.sort((a, b) => a.order - b.order);
-
-    renderList.forEach(item => {
-        if (item.type === 'tile') drawTile(item.obj.x, item.obj.y, item.obj);
-        else if (item.type === 'creature') drawCreature(item.obj);
-        else if (item.type === 'food') drawFood(item.obj);
-    });
-
-    ctx.restore();
-
-    // UI Updates
+    renderer.render(scene, camera);
     updateStatsUI();
-
-    requestAnimationFrame(gameLoop);
 }
 
 // --- INPUT & TOOLS ---
-let isDraggingCamera = false;
-let lastMouse = { x: 0, y: 0 };
-
 function setupTools() {
     document.querySelectorAll('.tool-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             selectedTool = btn.dataset.tool;
+            orbitControls.enabled = (selectedTool === 'inspect'); // Only allow drag camera if inspecting, otherwise it interferes with dragging creatures
         });
     });
 }
 
-function getMapPosFromEvent(e) {
-    let rect = canvas.getBoundingClientRect();
-    let mouseX = e.clientX - rect.left;
-    let mouseY = e.clientY - rect.top;
-
-    let adjX = (mouseX - canvas.width / 2 - camera.x) / camera.zoom;
-    let adjY = (mouseY - camera.y) / camera.zoom;
-
-    // We need to account for elevation, but for simplicity we do a flat check, 
-    // then refine by checking tiles back to front if needed.
-    let { x: mapX, y: mapY } = screenToMap(adjX, adjY);
-
-    // Refine: check rendered tiles backwards for precise polygon collision
-    // (Skipping for brevity, flat projection works okay-ish for a simple game)
-
-    return { mx: mapX, my: mapY, adjX, adjY };
+function getIntersect(e) {
+    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    
+    // Check creatures first
+    let creatureMeshes = creatures.map(c => c.meshGroup);
+    let intersects = raycaster.intersectObjects(creatureMeshes, true);
+    if (intersects.length > 0) {
+        // Find the root group
+        let obj = intersects[0].object;
+        while(obj.parent && !obj.userData.isCreature) obj = obj.parent;
+        if (obj.userData.isCreature) {
+            return { type: 'creature', obj: obj.userData.obj };
+        }
+    }
+    
+    // Check tiles
+    let flatTiles = [];
+    for(let i=0; i<MAP_SIZE; i++) flatTiles.push(...tileMeshes[i]);
+    
+    intersects = raycaster.intersectObjects(flatTiles);
+    if (intersects.length > 0) {
+        let mesh = intersects[0].object;
+        return { type: 'tile', obj: world[mesh.userData.x][mesh.userData.z], point: intersects[0].point };
+    }
+    
+    return null;
 }
 
 function setupInput() {
-    canvas.addEventListener('mousedown', (e) => {
-        if (e.button === 2 || e.button === 1) { // Right or Middle click to drag camera
-            isDraggingCamera = true;
-            lastMouse = { x: e.clientX, y: e.clientY };
-            return;
-        }
+    const container = renderer.domElement;
+    
+    // Highlight logic for tiles
+    let highlightMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1.05, 0.1, 1.05),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 })
+    );
+    scene.add(highlightMesh);
+    highlightMesh.visible = false;
 
-        let { mx, my, adjX, adjY } = getMapPosFromEvent(e);
-
-        // Find clicked creature
-        let clickedCreature = null;
-        for (let c of creatures) {
-            let cx = Math.floor(clamp(c.x, 0, MAP_SIZE - 1));
-            let cy = Math.floor(clamp(c.y, 0, MAP_SIZE - 1));
-            let elevation = world[cx] ? (world[cx][cy] ? world[cx][cy].elevation : 0) : 0;
-            const { x: sx, y: sy } = mapToIso(c.x, c.y, elevation);
-            let dist = Math.hypot(adjX - sx, adjY - (sy - 10 * c.genes.size)); // approximate center
-            if (dist < 20 * c.genes.size) {
-                clickedCreature = c;
-                break;
-            }
-        }
-
+    container.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return; // Only left click
+        
+        let hit = getIntersect(e);
+        
         if (selectedTool === 'inspect') {
-            if (clickedCreature) {
-                selectedEntity = { type: 'creature', obj: clickedCreature };
+            if (hit) {
+                selectedEntity = hit;
                 showInfoPanel();
             } else {
-                let tx = Math.floor(mx + 0.5);
-                let ty = Math.floor(my + 0.5);
-                if (tx >= 0 && tx < MAP_SIZE && ty >= 0 && ty < MAP_SIZE) {
-                    selectedEntity = { type: 'tile', obj: world[tx][ty] };
-                    showInfoPanel();
-                } else {
-                    selectedEntity = null;
-                    document.getElementById('info-panel').classList.add('hidden');
-                }
+                selectedEntity = null;
+                document.getElementById('info-panel').classList.add('hidden');
             }
         } else if (selectedTool === 'move') {
-            if (clickedCreature) {
-                draggedCreature = clickedCreature;
-                selectedEntity = { type: 'creature', obj: clickedCreature };
+            if (hit && hit.type === 'creature') {
+                draggedCreature = hit.obj;
+                selectedEntity = hit;
                 showInfoPanel();
+                orbitControls.enabled = false;
             }
         } else if (selectedTool === 'feed') {
-            foods.push({ x: mx, y: my });
+            if (hit && hit.type === 'tile') {
+                spawnFood(hit.point.x, hit.point.z);
+            }
         } else if (selectedTool.startsWith('terraform-')) {
-            let biomeKey = selectedTool.split('-')[1].toUpperCase();
-            let tx = Math.floor(mx + 0.5);
-            let ty = Math.floor(my + 0.5);
-            if (tx >= 0 && tx < MAP_SIZE && ty >= 0 && ty < MAP_SIZE && BIOMES[biomeKey]) {
-                world[tx][ty].biome = BIOMES[biomeKey];
-                world[tx][ty].elevation = BIOMES[biomeKey].height;
+            if (hit && hit.type === 'tile') {
+                let biomeKey = selectedTool.split('-')[1].toUpperCase();
+                let x = hit.obj.x;
+                let z = hit.obj.z;
+                if (BIOMES[biomeKey]) {
+                    world[x][z].biome = BIOMES[biomeKey];
+                    let mesh = tileMeshes[x][z];
+                    mesh.material.color.setHex(BIOMES[biomeKey].color);
+                    new TWEEN.Tween(mesh.scale)
+                        .to({ y: BIOMES[biomeKey].height }, 500)
+                        .easing(TWEEN.Easing.Bounce.Out)
+                        .start();
+                }
             }
         }
     });
 
-    canvas.addEventListener('mousemove', (e) => {
-        if (isDraggingCamera) {
-            camera.x += e.clientX - lastMouse.x;
-            camera.y += e.clientY - lastMouse.y;
-            lastMouse = { x: e.clientX, y: e.clientY };
+    container.addEventListener('mousemove', (e) => {
+        let hit = getIntersect(e);
+        
+        // Tile highlight
+        if (hit && hit.type === 'tile' && selectedEntity?.obj === hit.obj) {
+            highlightMesh.visible = true;
+            highlightMesh.position.set(hit.obj.x, hit.obj.biome.height + 0.05, hit.obj.z);
+        } else {
+            highlightMesh.visible = false;
         }
 
-        if (draggedCreature) {
-            let { mx, my } = getMapPosFromEvent(e);
-            draggedCreature.x = clamp(mx, 0, MAP_SIZE - 1);
-            draggedCreature.y = clamp(my, 0, MAP_SIZE - 1);
+        if (draggedCreature && hit && hit.type === 'tile') {
+            draggedCreature.x = clamp(hit.point.x, 0, MAP_SIZE-1);
+            draggedCreature.z = clamp(hit.point.z, 0, MAP_SIZE-1);
         }
     });
 
-    canvas.addEventListener('mouseup', (e) => {
-        isDraggingCamera = false;
+    container.addEventListener('mouseup', (e) => {
         if (draggedCreature) {
             draggedCreature.state = 'idle';
             draggedCreature.target = null;
             draggedCreature = null;
+            if (selectedTool === 'inspect') orbitControls.enabled = true;
         }
     });
-
-    canvas.addEventListener('wheel', (e) => {
-        if (e.deltaY < 0) camera.zoom *= 1.1;
-        else camera.zoom *= 0.9;
-        camera.zoom = clamp(camera.zoom, 0.2, 3);
-    });
-
-    // Prevent context menu
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
-}
-
-function spawnCreature(x, y) {
-    creatures.push(new Creature(x, y));
 }
 
 // --- UI UPDATES ---
@@ -659,13 +640,14 @@ function showInfoPanel() {
     const panel = document.getElementById('info-panel');
     const content = document.getElementById('info-content');
     panel.classList.remove('hidden');
-
+    
     if (!selectedEntity) return;
 
     if (selectedEntity.type === 'creature') {
         let c = selectedEntity.obj;
+        let colHtml = `hsl(${c.genes.hue}, ${c.genes.saturation}%, ${c.genes.lightness}%)`;
         content.innerHTML = `
-            <div class="creature-preview" style="background: ${c.color}"></div>
+            <div class="creature-preview" style="background: ${colHtml}"></div>
             <h4 style="text-align:center; margin-top:0;">Generation ${c.generation}</h4>
             <div class="tool-separator"></div>
             ${createStatBar('Happiness', c.happiness, 'happiness')}
@@ -677,15 +659,17 @@ function showInfoPanel() {
             <div class="info-row"><span class="info-label">Pref Moisture:</span> <span class="info-value">${Math.round(c.genes.prefMoisture)}</span></div>
             <div class="info-row"><span class="info-label">Pref Temp:</span> <span class="info-value">${Math.round(c.genes.prefTemp)}</span></div>
             <div class="info-row"><span class="info-label">Sociability:</span> <span class="info-value">${Math.round(c.genes.sociability)}</span></div>
+            <div class="info-row"><span class="info-label">Speed:</span> <span class="info-value">${c.genes.speed.toFixed(1)}</span></div>
             <div class="info-row"><span class="info-label">Size:</span> <span class="info-value">${c.genes.size.toFixed(2)}x</span></div>
         `;
     } else if (selectedEntity.type === 'tile') {
         let t = selectedEntity.obj;
+        let hexColor = '#' + t.biome.color.toString(16).padStart(6, '0');
         content.innerHTML = `
-            <h4 style="text-align:center; margin-top:0; color: ${t.biome.top}">${t.biome.name} Tile</h4>
-            <p style="text-align:center; font-size: 0.8rem; color: #94a3b8">(${t.x}, ${t.y})</p>
+            <h4 style="text-align:center; margin-top:0; color: ${hexColor}">${t.biome.name} Tile</h4>
+            <p style="text-align:center; font-size: 0.8rem; color: #94a3b8">(${t.x}, ${t.z})</p>
             <div class="tool-separator"></div>
-            <div class="info-row"><span class="info-label">Elevation:</span> <span class="info-value">${t.elevation}</span></div>
+            <div class="info-row"><span class="info-label">Elevation:</span> <span class="info-value">${t.biome.height.toFixed(1)}</span></div>
             <div class="info-row"><span class="info-label">Moisture:</span> <span class="info-value">${t.biome.moisture}</span></div>
             <div class="info-row"><span class="info-label">Temp:</span> <span class="info-value">${t.biome.temp}</span></div>
             <div class="info-row"><span class="info-label">Light:</span> <span class="info-value">${t.biome.light}</span></div>
@@ -696,10 +680,9 @@ function showInfoPanel() {
 function updateStatsUI() {
     document.getElementById('stat-pop').innerText = creatures.length;
     document.getElementById('stat-gen').innerText = generation;
-
-    // Update active info panel if needed
+    
     if (selectedEntity && selectedEntity.type === 'creature' && document.getElementById('info-panel').classList.contains('hidden') === false) {
-        showInfoPanel(); // Re-render stats
+        showInfoPanel();
     }
 }
 

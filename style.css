@@ -28,7 +28,7 @@ html {
     color: var(--text-primary);
 }
 
-#gameCanvas {
+#game-container canvas {
     position: absolute;
     top: 0;
     left: 0;
@@ -38,7 +38,7 @@ html {
     cursor: grab;
 }
 
-#gameCanvas:active {
+#game-container canvas:active {
     cursor: grabbing;
 }
 
