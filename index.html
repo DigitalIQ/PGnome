@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PGNome: Isometric Evolution</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="ui-container">
+        <header class="glass-panel">
+            <h1>PGNome</h1>
+            <p>Breed creatures, shape the world, expand the gene pool.</p>
+        </header>
+
+        <div id="tools" class="glass-panel">
+            <h3>God Tools</h3>
+            <button class="tool-btn active" data-tool="inspect" title="Inspect Creature or Tile">
+                <span class="icon">🔍</span> Inspect
+            </button>
+            <button class="tool-btn" data-tool="move" title="Drag and Drop Creatures">
+                <span class="icon">✋</span> Move
+            </button>
+            <button class="tool-btn" data-tool="feed" title="Drop Food">
+                <span class="icon">🍎</span> Feed
+            </button>
+            <div class="tool-separator"></div>
+            <h4>Terraform</h4>
+            <button class="tool-btn" data-tool="terraform-water" title="Create Water">💧 Water</button>
+            <button class="tool-btn" data-tool="terraform-grass" title="Create Grass">🌿 Grass</button>
+            <button class="tool-btn" data-tool="terraform-rock" title="Create Rock">🪨 Rock</button>
+            <button class="tool-btn" data-tool="terraform-mud" title="Create Mud">🟤 Mud</button>
+            <button class="tool-btn" data-tool="terraform-forest" title="Create Forest">🌲 Forest</button>
+            <button class="tool-btn" data-tool="terraform-sand" title="Create Sand">🏜️ Sand</button>
+        </div>
+
+        <div id="info-panel" class="glass-panel hidden">
+            <h3>Selection Info</h3>
+            <div id="info-content">
+                <p>Select a tile or creature to view details.</p>
+            </div>
+        </div>
+
+        <div id="stats-panel" class="glass-panel">
+            <h3>World Stats</h3>
+            <p>Population: <span id="stat-pop">0</span></p>
+            <p>Generations: <span id="stat-gen">1</span></p>
+            <button id="btn-spawn" class="action-btn">Spawn Random Couple</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+    <script src="app.js"></script>
+</body>
+
+</html>
