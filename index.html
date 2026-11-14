@@ -4,60 +4,158 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PGNome: Isometric Evolution</title>
+    <title>PGNome: Island Evolution</title>
+    <meta name="description" content="Shape a small island and watch a population of Nomes adapt to it, generation after generation.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-    <!-- Open Source Libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
 
 <body>
-    <div id="ui-container">
-        <header class="glass-panel">
-            <h1>PGNome</h1>
-            <p>Breed creatures, shape the world, expand the gene pool.</p>
-        </header>
+    <div id="game"></div>
 
-        <div id="tools" class="glass-panel">
-            <h3>God Tools</h3>
-            <button class="tool-btn active" data-tool="inspect" title="Inspect Creature or Tile">
-                <span class="icon">🔍</span> Inspect
-            </button>
-            <button class="tool-btn" data-tool="move" title="Drag and Drop Creatures">
-                <span class="icon">✋</span> Move
-            </button>
-            <button class="tool-btn" data-tool="feed" title="Drop Food">
-                <span class="icon">🍎</span> Feed
-            </button>
-            <div class="tool-separator"></div>
-            <h4>Terraform</h4>
-            <button class="tool-btn" data-tool="terraform-water" title="Create Water">💧 Water</button>
-            <button class="tool-btn" data-tool="terraform-grass" title="Create Grass">🌿 Grass</button>
-            <button class="tool-btn" data-tool="terraform-rock" title="Create Rock">🪨 Rock</button>
-            <button class="tool-btn" data-tool="terraform-mud" title="Create Mud">🟤 Mud</button>
-            <button class="tool-btn" data-tool="terraform-forest" title="Create Forest">🌲 Forest</button>
-            <button class="tool-btn" data-tool="terraform-sand" title="Create Sand">🏜️ Sand</button>
+    <div id="hud">
+        <div id="left">
+            <header id="brand" class="panel">
+                <h1>PGNome</h1>
+                <p>Shape the island. Evolution does the rest.</p>
+            </header>
+
+            <nav id="tools" class="panel" aria-label="Tools">
+                <h2>Hands</h2>
+                <div class="tool-grid">
+                    <button class="tool active" data-tool="inspect" title="Inspect a Nome or a tile (1)">
+                        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></svg>
+                        <span>Inspect</span><kbd>1</kbd>
+                    </button>
+                    <button class="tool" data-tool="move" title="Pick up a Nome and carry it (2)">
+                        <svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>
+                        <span>Carry</span><kbd>2</kbd>
+                    </button>
+                    <button class="tool" data-tool="feed" title="Scatter food on a tile and its neighbours (3)">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="6.5"/><path d="M12 7.5c0-2 1-3.5 3-4.5"/></svg>
+                        <span>Feed</span><kbd>3</kbd>
+                    </button>
+                </div>
+                <h2>Terrain <small>click or drag</small></h2>
+                <div class="tool-grid terrain">
+                    <button class="tool" data-tool="paint-2" title="Meadow: lots of food (4)"><i class="sw" style="--c:#83bf55"></i><span>Meadow</span><kbd>4</kbd></button>
+                    <button class="tool" data-tool="paint-3" title="Forest: most food, cool and damp (5)"><i class="sw" style="--c:#3d7a3c"></i><span>Forest</span><kbd>5</kbd></button>
+                    <button class="tool" data-tool="paint-0" title="Water: Nomes cannot cross it (6)"><i class="sw" style="--c:#3f86c4"></i><span>Water</span><kbd>6</kbd></button>
+                    <button class="tool" data-tool="paint-1" title="Sand: hot and dry, little food (7)"><i class="sw" style="--c:#e2c780"></i><span>Sand</span><kbd>7</kbd></button>
+                    <button class="tool" data-tool="paint-4" title="Marsh: wet and slow to walk (8)"><i class="sw" style="--c:#6f5d3d"></i><span>Marsh</span><kbd>8</kbd></button>
+                    <button class="tool" data-tool="paint-5" title="Rock: high and cold, raises the ground (9)"><i class="sw" style="--c:#8c8f93"></i><span>Rock</span><kbd>9</kbd></button>
+                </div>
+            </nav>
         </div>
 
-        <div id="info-panel" class="glass-panel hidden">
-            <h3>Selection Info</h3>
-            <div id="info-content">
-                <p>Select a tile or creature to view details.</p>
+        <div id="timebar" class="panel">
+            <div class="season">
+                <svg viewBox="0 0 36 36" class="ring"><circle cx="18" cy="18" r="15" class="track"/><circle cx="18" cy="18" r="15" class="fill" id="season-ring"/></svg>
+                <div>
+                    <strong id="season-name">Spring</strong>
+                    <span id="year">Year 1</span>
+                </div>
             </div>
+            <div class="speed" role="group" aria-label="Simulation speed">
+                <button data-speed="0" title="Pause (Space)">
+                    <svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>
+                </button>
+                <button data-speed="1" class="active" title="Normal speed">1x</button>
+                <button data-speed="3" title="Fast">3x</button>
+                <button data-speed="8" title="Very fast">8x</button>
+            </div>
+            <button id="btn-panel" class="panel-toggle" title="Population and goals">
+                <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+            </button>
         </div>
 
-        <div id="stats-panel" class="glass-panel">
-            <h3>World Stats</h3>
-            <p>Population: <span id="stat-pop">0</span></p>
-            <p>Generations: <span id="stat-gen">1</span></p>
-            <button id="btn-spawn" class="action-btn">Spawn Random Couple</button>
+        <aside id="right">
+            <section id="selection" class="panel hidden" aria-live="polite">
+                <button class="close" id="sel-close" title="Close (Esc)">&times;</button>
+                <div id="sel-body"></div>
+            </section>
+
+            <section id="world-panel" class="panel">
+                <h2>Population</h2>
+                <div class="stat-row">
+                    <div><b id="stat-pop">0</b><span>alive</span></div>
+                    <div><b id="stat-gen">1</b><span>generations</span></div>
+                    <div><b id="stat-births">0</b><span>born</span></div>
+                    <div><b id="stat-deaths">0</b><span>died</span></div>
+                </div>
+                <canvas id="chart" width="560" height="120" aria-label="Population over time"></canvas>
+                <details open>
+                    <summary>Gene pool</summary>
+                    <p class="hint">Bar: range in the population. Dot: average.</p>
+                    <div id="genepool"></div>
+                </details>
+                <details>
+                    <summary>World</summary>
+                    <label class="slider">
+                        <span>Mutation rate <output id="mut-out">1.0</output></span>
+                        <input type="range" id="mutation" min="0" max="3" step="0.1" value="1">
+                    </label>
+                    <div class="btn-row">
+                        <button id="btn-spawn" class="btn">Drop in two wild Nomes</button>
+                        <button id="btn-new" class="btn ghost">New island</button>
+                    </div>
+                    <p class="hint" id="seed-info"></p>
+                </details>
+            </section>
+
+            <section id="goals-panel" class="panel">
+                <details open>
+                    <summary>Goals <span id="goal-count">0/8</span></summary>
+                    <ul id="goals"></ul>
+                </details>
+            </section>
+        </aside>
+
+        <div id="log" aria-live="polite"></div>
+        <div id="toasts"></div>
+        <p id="controls-hint">Right-drag: rotate &middot; Shift-drag or WASD: move &middot; Scroll: zoom &middot; F: follow</p>
+    </div>
+
+    <div id="start" class="overlay">
+        <div class="card">
+            <h1>PGNome</h1>
+            <p class="lead">A small island. A handful of Nomes. Every child inherits a mix of its parents' genes, with small mutations.</p>
+            <ul class="how">
+                <li><b>Nomes</b> eat plants, look for a partner and try to stay comfortable.</li>
+                <li><b>Seasons</b> change the temperature. Winter is lean. Big Nomes keep warm, big ears help in heat.</li>
+                <li><b>You</b> shape the land, carry Nomes and drop food. You never control them directly.</li>
+            </ul>
+            <div class="btn-row">
+                <button id="btn-continue" class="btn hidden">Continue</button>
+                <button id="btn-start" class="btn">New island</button>
+            </div>
+            <label class="seed">Seed <input id="seed-input" type="text" inputmode="numeric" placeholder="random"></label>
         </div>
     </div>
-    
-    <div id="game-container"></div>
-    <script src="app.js"></script>
+
+    <div id="extinct" class="overlay hidden">
+        <div class="card">
+            <h1>Extinct</h1>
+            <p class="lead" id="extinct-text"></p>
+            <div class="btn-row">
+                <button id="btn-reseed" class="btn">Bring new Nomes</button>
+                <button id="btn-new2" class="btn ghost">New island</button>
+            </div>
+        </div>
+    </div>
+
+    <noscript>PGNome needs JavaScript and WebGL.</noscript>
+    <script type="module" src="js/main.js"></script>
 </body>
 
 </html>
