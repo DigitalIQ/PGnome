@@ -987,3 +987,26 @@ ol.records .sc { text-align: right; font-family: var(--display); font-size: 17px
     font-size: 13px;
 }
 .trigger-row select:focus-visible { outline: 2px solid var(--accent, #e8b45a); outline-offset: 2px; }
+
+/* World settings opened from the gear button get a short highlight. */
+#world-settings { scroll-margin-top: 8px; border-radius: 10px; }
+#world-settings.flash { animation: settings-flash 1.2s ease-out; }
+@keyframes settings-flash {
+    0% { box-shadow: 0 0 0 2px var(--accent); }
+    100% { box-shadow: 0 0 0 2px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { #world-settings.flash { animation: none; } }
+
+/* Medium screens: the time bar no longer fits between the two side panels.
+   It moves next to the left panel and the right panel starts below it. */
+@media (min-width: 901px) and (max-width: 1279px) {
+    #timebar { left: 264px; transform: none; gap: 12px; }
+    #right { top: 84px; }
+}
+
+/* Phones: the top bar holds four buttons on the right, so everything gets a bit tighter. */
+@media (max-width: 560px) {
+    #timebar { gap: 4px; padding: 6px; }
+    #timebar .icon-btn, #timebar .panel-toggle { width: 30px; height: 30px; }
+    .speed button { min-width: 26px; padding-left: 4px; padding-right: 4px; }
+}

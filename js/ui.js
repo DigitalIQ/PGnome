@@ -96,6 +96,7 @@ export class UI {
         document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => actions.setMode(b.dataset.mode)));
         $('btn-records').addEventListener('click', () => actions.showRecords());
         $('btn-stats').addEventListener('click', () => actions.showStats());
+        $('btn-settings').addEventListener('click', () => this.openSettings());
         $('btn-all-records').addEventListener('click', () => actions.showRecords());
         $('records-close').addEventListener('click', () => actions.closeRecords());
         $('records').addEventListener('click', e => { if (e.target.id === 'records') actions.closeRecords(); });
@@ -127,6 +128,26 @@ export class UI {
             this.renderSelection(true);
             this.update(1);
         });
+    }
+
+    // Opens the world settings in the side panel and scrolls them into view.
+    openSettings() {
+        const d = $('world-settings');
+        const right = $('right');
+        const shown = d.open && (right.classList.contains('open') || getComputedStyle($('world-panel')).display !== 'none');
+        if (shown && d.dataset.byButton) {
+            d.open = false;
+            delete d.dataset.byButton;
+            right.classList.remove('open');
+            return;
+        }
+        right.classList.add('open');
+        d.open = true;
+        d.dataset.byButton = '1';
+        d.scrollIntoView({ block: 'start' });
+        d.classList.remove('flash');
+        void d.offsetWidth;
+        d.classList.add('flash');
     }
 
     setTool(tool) {
