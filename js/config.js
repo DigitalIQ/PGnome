@@ -10,7 +10,7 @@ export const BREED_COOLDOWN = 24;
 export const SAVE_KEY = 'pgnome-save-v2';
 export const SCORE_KEY = 'pgnome-records-v1';
 
-export const B = { WATER: 0, SAND: 1, MEADOW: 2, FOREST: 3, MARSH: 4, ROCK: 5 };
+export const B = { WATER: 0, SAND: 1, MEADOW: 2, FOREST: 3, MARSH: 4, ROCK: 5, LAVA: 6 };
 
 // temp and moisture are on an abstract 0..100 scale.
 // food is the plant capacity of a tile, regrow the share of it that grows back per second.
@@ -20,8 +20,45 @@ export const BIOMES = [
     { key: 'meadow', name: 'Meadow', color: 0x83bf55, temp: 56, moisture: 48, food: 1.0, regrow: 0.009, speed: 1.0, walkable: true, snow: 0.85 },
     { key: 'forest', name: 'Forest', color: 0x3d7a3c, temp: 44, moisture: 66, food: 1.3, regrow: 0.007, speed: 0.75, walkable: true, snow: 0.7 },
     { key: 'marsh', name: 'Marsh', color: 0x6f5d3d, temp: 52, moisture: 88, food: 0.7, regrow: 0.008, speed: 0.6, walkable: true, snow: 0.6 },
-    { key: 'rock', name: 'Rock', color: 0x8c8f93, temp: 28, moisture: 18, food: 0.08, regrow: 0.002, speed: 0.5, walkable: true, snow: 0.95 }
+    { key: 'rock', name: 'Rock', color: 0x8c8f93, temp: 28, moisture: 18, food: 0.08, regrow: 0.002, speed: 0.5, walkable: true, snow: 0.95 },
+    { key: 'lava', name: 'Lava', color: 0xff5a1f, temp: 100, moisture: 0, food: 0, regrow: 0, speed: 0, walkable: false, snow: 0 }
 ];
+
+// Food types. energy is per food unit, handle the seconds a portion takes before genes.
+// tox scales how much of a tile's plant poison ends up in this food.
+export const FOODS = {
+    greens: { name: 'Greens', verb: 'Grazing', energy: 80, handle: 1, tox: 0.45 },
+    fruit: { name: 'Fruit', verb: 'Eating fruit', energy: 125, handle: 1.3, tox: 1 },
+    nuts: { name: 'Nuts', verb: 'Cracking nuts', energy: 175, handle: 3.2, tox: 0.15 },
+    shroom: { name: 'Mushrooms', verb: 'Eating mushrooms', energy: 105, handle: 0.9, tox: 1.4 },
+    roots: { name: 'Roots', verb: 'Digging up roots', energy: 95, handle: 2.4, tox: 0.3 },
+    seaweed: { name: 'Seaweed', verb: 'Grazing seaweed', energy: 80, handle: 1.1, tox: 0 },
+    nectar: { name: 'Moonflower nectar', verb: 'Drinking moonflower nectar', energy: 110, handle: 0.7, tox: 0 }
+};
+
+// Predators evolve too. Each hawk and lurker carries these genes and passes them on.
+export const HAWK_GENES = {
+    dive: { label: 'Dive speed', min: 0.7, max: 1.6 },
+    eyes: { label: 'Sharp eyes', min: 0.6, max: 1.5 },
+    size: { label: 'Size', min: 0.7, max: 1.5 },
+    night: { label: 'Night hunting', min: 0, max: 1 },
+    stealth: { label: 'Stealth', min: 0, max: 1 }
+};
+export const LURKER_GENES = {
+    camo: { label: 'Camouflage', min: 0, max: 1 },
+    strike: { label: 'Strike speed', min: 0.6, max: 1.5 },
+    venom: { label: 'Venom', min: 0, max: 1 },
+    size: { label: 'Size', min: 0.7, max: 1.4 },
+    habitat: { label: 'Forest liking', min: 0, max: 1 }
+};
+
+export const DISASTERS = {
+    quake: { name: 'Earthquake' },
+    volcano: { name: 'Volcano' },
+    tsunami: { name: 'Tsunami' },
+    wildfire: { name: 'Wildfire' },
+    plague: { name: 'Plague' }
+};
 
 export const SEASONS = ['Spring', 'Summer', 'Autumn', 'Winter'];
 
@@ -51,7 +88,15 @@ export const GENES = {
     horns: { label: 'Horns', min: 0, max: 1, body: true, effect: 'Horns win food fights, attract partners and scare off hawks. Lightning likes them.' },
     tail: { label: 'Tail', min: 0, max: 1, body: true, effect: 'Balances in storms, steers when swimming and sheds a little heat.' },
     pattern: { label: 'Pattern', min: 0, max: 1, body: true, effect: 'Spots and stripes attract partners, but hawks see them too.' },
-    hue2: { label: 'Accent color', min: 0, max: 360, wrap: true, body: true, effect: 'Color of spots, stripes and crest. Pure looks.' }
+    hue2: { label: 'Accent color', min: 0, max: 360, wrap: true, body: true, effect: 'Color of spots, stripes and crest. Pure looks.' },
+    jaw: { label: 'Jaw', min: 0, max: 1, effect: 'Cracks nuts fast, the best winter food. A heavy head costs energy and slows grazing a little.' },
+    claws: { label: 'Claws', min: 0, max: 1, effect: 'Digs burrows, roots and drains marshes. Clumsy and slow on flat ground.' },
+    toxinRes: { label: 'Poison tolerance', min: 0, max: 1, effect: 'Eats poisonous plants and survives lurker venom. A strong liver burns energy all the time.' },
+    palate: { label: 'Taste', min: 0, max: 1, effect: 'Tastes poison and spits it out, avoids warning colors. Wary eaters also skip some good food.' },
+    vigilance: { label: 'Alertness', min: 0, max: 1, effect: 'Looks up while eating and spots hawks and lurkers. Every meal takes longer.' },
+    care: { label: 'Parental care', min: 0, max: 1, effect: 'Parents guard and feed their young. Children start strong, parents lose time and food.' },
+    builder: { label: 'Building drive', min: 0, max: 1, effect: 'Builds dams into shallow water and plants seeds. Work takes time away from eating.' },
+    immunity: { label: 'Immunity', min: 0, max: 1, effect: 'Shrugs off plague. A strong immune system costs energy.' }
 };
 
 export const legCount = v => (v < 0.3 ? 2 : v < 0.78 ? 4 : 6);
@@ -107,5 +152,8 @@ export const GOALS = [
     { id: 'sixlegs', label: 'Evolve a six-legged Nome' },
     { id: 'swimmer', label: 'Evolve a swimmer (webbed feet over 70%)' },
     { id: 'night', label: 'Evolve a night walker (night life over 70%)' },
-    { id: 'pop100', label: 'Grow to 100 Nomes at once' }
+    { id: 'pop100', label: 'Grow to 100 Nomes at once' },
+    { id: 'poison', label: 'Evolve poison tolerance over 70%' },
+    { id: 'dam', label: 'Let the Nomes build land from the sea' },
+    { id: 'disaster', label: 'Keep 20 Nomes alive through a disaster' }
 ];

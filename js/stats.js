@@ -1,4 +1,4 @@
-import { GENES, BIOMES, WEATHER, YEAR_LENGTH, MODES, legCount, eyeCount, patternName } from './config.js';
+import { GENES, BIOMES, WEATHER, YEAR_LENGTH, MODES, FOODS, HAWK_GENES, LURKER_GENES, DISASTERS, legCount, eyeCount, patternName } from './config.js';
 import { STAT_GENES } from './game.js';
 import { isWalkable } from './world.js';
 import { scoreOf } from './scores.js';
@@ -11,7 +11,7 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;'
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const pct = (a, b) => (b ? Math.round(a / b * 100) : 0) + '%';
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
-const TABS = [['overview', 'Overview'], ['population', 'Population'], ['genes', 'Genes'], ['body', 'Body'], ['deaths', 'Deaths'], ['world', 'World'], ['notables', 'Notables']];
+const TABS = [['overview', 'Overview'], ['population', 'Population'], ['genes', 'Genes'], ['body', 'Body'], ['food', 'Food'], ['dangers', 'Dangers'], ['deaths', 'Deaths'], ['world', 'World'], ['notables', 'Notables']];
 
 // Dark-mode categorical steps, validated against the card surface #142628.
 const SERIES = { blue: '#3987e5', orange: '#d95926', aqua: '#199e70', yellow: '#c98500', magenta: '#d55181', green: '#0ca30c', violet: '#9085e9', red: '#e66767' };
@@ -117,7 +117,9 @@ export class StatsView {
             tile('twin births', fmt(s.twins)),
             tile('average age now', Math.round(avgAge) + 's'),
             tile('average age at death', Math.round(deathAge) + 's'),
-            tile('caught by hawks', fmt(s.hawk.catches), `${fmt(s.hawk.dives)} dives`),
+            tile('caught by predators', fmt(s.hawk.catches + s.lurker.catches), `${fmt(s.hawk.catches)} hawks, ${fmt(s.lurker.catches)} lurkers`),
+            tile('poisoned', fmt(s.poison.cases), `${fmt(s.poison.spat)} times spat out`),
+            tile('disasters', fmt(s.disasters.length)),
             tile('lightning strikes', fmt(s.strikes), s.burned ? `${fmt(s.burned)} forests burned` : ''),
             tile('goals reached', `${Object.keys(g.goals).length}`),
             tile('score this run', fmt(run)),
@@ -140,6 +142,7 @@ export class StatsView {
         this.addChart('Living on other islands', h.map(p => [p.t, p.sat ?? 0]), SERIES.aqua);
         this.addChart('Land tiles', h.map(p => [p.t, p.land]), SERIES.blue);
         this.addChart('Hawks hunting', h.map(p => [p.t, p.hawks ?? 0]), SERIES.orange);
+        this.addChart('Lurkers', h.map(p => [p.t, p.lurkers ?? 0]), SERIES.yellow);
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
         const whereBars = bars([
@@ -232,10 +235,11 @@ export class StatsView {
         const weather = Object.entries(s.weather).sort((a, b) => b[1] - a[1])
             .map(([k, v]) => ({ label: WEATHER[k] ? WEATHER[k].name : k, value: v, text: v >= 60 ? `${(v / 60).toFixed(1)} min` : `${Math.round(v)} s` }));
         const food = s.food;
+        const lastH = h[h.length - 1];
         const foodBars = bars([
-            { label: 'Plants', value: food.plants },
-            { label: 'Seaweed', value: food.seaweed },
-            { label: 'Moonflower nectar', value: food.nectar }
+            { label: 'Burrows now', value: lastH ? lastH.burrows || 0 : 0, noShare: true },
+            { label: 'Fires burned out', value: s.burned, noShare: true },
+            { label: 'Lightning strikes', value: s.strikes, noShare: true }
         ], SERIES.green);
         const lands = h.map(p => p.land);
         const isl = g.world.islands();
@@ -247,11 +251,97 @@ export class StatsView {
             tile('sea level', `${g.world.seaNow >= 0.36 ? '+' : ''}${Math.round((g.world.seaNow - 0.36) * 100)}`),
             tile('hawk dives', fmt(s.hawk.dives), `${pct(s.hawk.catches, s.hawk.dives)} successful`),
             tile('escaped hawks', fmt(s.hawk.escapes)),
-            tile('times you fed', fmt(food.fed))
+            tile('burrows dug', fmt(s.work.burrows)),
+            tile('dams finished', fmt(s.work.dams), 'tiles of new land'),
+            tile('tiles planted', fmt(s.work.planted)),
+            tile('marshes drained', fmt(s.work.drained))
         ].join('');
         return `<div class="st-tiles">${tiles}</div>
             <div class="st-cols">${section('Weather so far', weather.length ? bars(weather, SERIES.blue, wt) : '<p class="hint">No weather yet.</p>')}
-            ${section('What the Nomes ate', foodBars, 'In food units. Plants grow on land, seaweed in shallow water, nectar only at night.')}</div>`;
+            ${section('Marks on the land', foodBars, 'Burrows shelter from hawks, hail and cold. Fire turns forest into fertile meadow.')}</div>`;
+    }
+
+    food() {
+        const g = this.game, s = g.stats, h = g.longHistory, f = s.food;
+        const eaten = Object.keys(FOODS).map(k => ({ label: FOODS[k].name, value: (f[k] || 0) + (k === 'greens' ? f.plants || 0 : 0) }));
+        let tox = 0, toxN = 0, toxic = 0;
+        const avail = { greens: 0, fruit: 0, nuts: 0, shroom: 0, roots: 0, seaweed: 0, nectar: 0 };
+        for (const t of g.world.tiles) {
+            if (t.biome === 0) { avail.seaweed += t.food; continue; }
+            if (!isWalkable(t)) continue;
+            tox += t.tox; toxN++;
+            if (t.tox > 0.35) toxic++;
+            avail.greens += t.food; avail.fruit += t.fruit; avail.nuts += t.nuts; avail.shroom += t.shroom; avail.roots += t.roots;
+            avail.nectar += g.world.bloom[t.i];
+        }
+        const availBars = bars(Object.keys(avail).map(k => ({ label: FOODS[k].name, value: avail[k], text: avail[k].toFixed(1) })), SERIES.aqua);
+        const n = g.creatures.length;
+        const resAvg = n ? g.creatures.reduce((a, c) => a + c.genes.toxinRes, 0) / n : 0;
+        const palAvg = n ? g.creatures.reduce((a, c) => a + c.genes.palate, 0) / n : 0;
+        if (h.length >= 2) {
+            this.addChart('Plant poison (average)', h.map(p => [p.t, Math.round((p.tox ?? 0) * 100)]), SERIES.violet);
+            const ri = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2').indexOf('toxinRes');
+            this.addChart('Nome poison tolerance (average)', h.map(p => [p.t, Math.round(((p.g && p.g[ri]) ?? 0) * 100)]), SERIES.magenta);
+        }
+        const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
+            <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
+        const tiles = [
+            tile('plant poison now', Math.round(tox / Math.max(1, toxN) * 100) + '%', `${fmt(toxic)} tiles with warning colors`),
+            tile('poison tolerance', Math.round(resAvg * 100) + '%', 'Nome average'),
+            tile('taste', Math.round(palAvg * 100) + '%', 'Nome average'),
+            tile('poisoned', fmt(s.poison.cases)),
+            tile('spat out', fmt(s.poison.spat)),
+            tile('times you fed', fmt(f.fed))
+        ].join('');
+        return `<div class="st-tiles">${tiles}</div>
+            ${charts ? section('The poison race', `<div class="st-charts">${charts}</div>`, 'Plants that get eaten turn bitter. Nomes answer with tolerance or taste. Poison costs plants growth, so it fades where nobody grazes.') : ''}
+            <div class="st-cols">${section('What the Nomes ate', bars(eaten, SERIES.green), 'In food units, since the start.')}
+            ${section('Food on the island now', availBars, 'Fruit grows in summer, nuts in autumn and last into winter, mushrooms after rain. Roots need claws.')}</div>`;
+    }
+
+    dangers() {
+        const g = this.game, s = g.stats, h = g.longHistory;
+        const hk = Object.keys(HAWK_GENES), lk = Object.keys(LURKER_GENES);
+        const now = (list, table) => {
+            if (!list.length) return '<p class="hint">None right now.</p>';
+            return bars(Object.entries(table).map(([k, d]) => {
+                const v = list.reduce((a, p) => a + p.genes[k], 0) / list.length;
+                return { label: d.label, value: (v - d.min) / (d.max - d.min) * 100, text: d.max === 1 ? Math.round(v * 100) + '%' : v.toFixed(2), noShare: true };
+            }), SERIES.orange, null, 100);
+        };
+        const hawks = g.hawks.filter(x => !x.leaving), lurkers = g.lurkers;
+        if (h.length >= 2) {
+            // Only samples with predators alive; values as 0 to 100 of each gene range.
+            const series = (key, table, keys, k) => {
+                const d = table[k], i = keys.indexOf(k);
+                return h.filter(p => p[key]).map(p => [p.t, Math.round((p[key][i] - d.min) / (d.max - d.min) * 100)]);
+            };
+            const add = (title, pts, color) => { if (pts.length >= 2) this.addChart(title, pts, color); };
+            add('Hawk night hunting', series('hg', HAWK_GENES, hk, 'night'), SERIES.violet);
+            add('Hawk dive speed', series('hg', HAWK_GENES, hk, 'dive'), SERIES.orange);
+            add('Hawk stealth', series('hg', HAWK_GENES, hk, 'stealth'), SERIES.blue);
+            add('Hawk size', series('hg', HAWK_GENES, hk, 'size'), SERIES.aqua);
+            add('Lurker camouflage', series('lg', LURKER_GENES, lk, 'camo'), SERIES.yellow);
+            add('Lurker venom', series('lg', LURKER_GENES, lk, 'venom'), SERIES.magenta);
+        }
+        const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
+            <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
+        const tiles = [
+            tile('hawks now', fmt(hawks.length), `${fmt(s.hawk.born)} born, ${fmt(s.hawk.died)} died`),
+            tile('hawk dives', fmt(s.hawk.dives), `${pct(s.hawk.catches, s.hawk.dives)} successful`),
+            tile('lurkers now', fmt(lurkers.length), `${fmt(s.lurker.born)} born, ${fmt(s.lurker.died)} died`),
+            tile('lurker strikes', fmt(s.lurker.strikes), `${pct(s.lurker.catches, s.lurker.strikes)} successful`),
+            tile('plague cases', fmt(s.plague.cases)),
+            tile('land made by lava', fmt(s.landMade || 0))
+        ].join('');
+        const ds = s.disasters.slice().reverse();
+        const list = ds.length ? `<table class="st-table"><thead><tr><th>Year</th><th>Disaster</th><th>Nomes before</th><th>A minute later</th></tr></thead><tbody>
+            ${ds.map(e => `<tr><td>${e.y}</td><td>${esc(DISASTERS[e.kind].name)}</td><td>${fmt(e.before)}</td><td>${e.after == null ? '...' : fmt(e.after)}</td></tr>`).join('')}</tbody></table>`
+            : '<p class="hint">No disaster yet. You can unleash one in the settings under World.</p>';
+        return `<div class="st-tiles">${tiles}</div>
+            ${charts ? section('How the hunters evolve', `<div class="st-charts">${charts}</div>`, 'Predators that hunt well raise young and pass on their genes. 0 to 100 of each gene range.') : ''}
+            <div class="st-cols">${section('Hawk genes now', now(hawks, HAWK_GENES))}${section('Lurker genes now', now(lurkers, LURKER_GENES))}</div>
+            ${section('Disasters', list)}`;
     }
 
     notables() {
@@ -270,6 +360,10 @@ export class StatsView {
             ['Most nocturnal', best(c => c.genes.nocturnal), c => `night life ${geneText('nocturnal', c.genes.nocturnal)}`],
             ['Furriest', best(c => c.genes.fur), c => `fur ${geneText('fur', c.genes.fur)}`],
             ['Most curious', best(c => c.genes.curiosity), c => `curiosity ${geneText('curiosity', c.genes.curiosity)}`],
+            ['Most poison-proof', best(c => c.genes.toxinRes), c => `tolerance ${geneText('toxinRes', c.genes.toxinRes)}`],
+            ['Most alert', best(c => c.genes.vigilance), c => `alertness ${geneText('vigilance', c.genes.vigilance)}`],
+            ['Best digger', best(c => c.genes.claws), c => `claws ${geneText('claws', c.genes.claws)}`],
+            ['Busiest builder', best(c => c.genes.builder), c => `building drive ${geneText('builder', c.genes.builder)}`],
             ['Longest life ahead', best(c => c.t.lifespan - c.age), c => `${Math.round(c.t.lifespan - c.age)}s left`]
         ];
         return `<div class="st-notables">${items.map(([title, c, val]) => `

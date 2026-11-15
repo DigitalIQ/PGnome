@@ -80,6 +80,11 @@ export class UI {
             game.hawksOn = e.target.checked;
             game.hawkTimer = 0;
         });
+        $('disasters').addEventListener('change', e => { game.disastersOn = e.target.checked; });
+        $('btn-disaster').addEventListener('click', () => {
+            if (!game.world || game.extinct) return;
+            if (!game.disasters.trigger($('disaster-kind').value)) this.toast('Nothing happens', 'The island has nothing for this disaster right now.');
+        });
         $('btn-new').addEventListener('click', () => actions.showStart());
         $('sel-close').addEventListener('click', () => actions.select(null));
         $('btn-panel').addEventListener('click', () => $('right').classList.toggle('open'));
@@ -107,10 +112,12 @@ export class UI {
         game.on('log', e => this.addLog(e));
         game.on('goal', g => this.toast('Goal reached', g.label));
         game.on('extinct', () => this.showExtinct());
+        game.on('disaster', k => this.toast('Disaster', { quake: 'Earthquake', volcano: 'Volcano eruption', tsunami: 'Tsunami', wildfire: 'Wildfire', plague: 'Plague' }[k]));
         game.on('reset', () => {
             $('log').innerHTML = '';
             $('mutation').value = game.mutationRate;
             $('hawks').checked = game.hawksOn;
+            $('disasters').checked = game.disastersOn;
             $('mut-out').textContent = game.mutationRate.toFixed(1);
             $('seed-info').textContent = `Seed ${game.seed}`;
             this.lastHistoryLen = -1;
@@ -312,7 +319,8 @@ export class UI {
         $('island-row').innerHTML = `<div><b>${st.land}${arrow(st.land, p.land, 2)}</b><span>land tiles</span></div>
             <div><b>${st.peak.toFixed(1)}${arrow(st.peak, p.peak, 0.1)}</b><span>highest</span></div>
             <div><b>${(st.deep * 10).toFixed(1)}${arrow(st.deep, p.deep, 0.01)}</b><span>deepest</span></div>${sea}
-            <div><b>${g.hawks.filter(h => !h.leaving && !h.away).length}</b><span>hawks</span></div>`;
+            <div><b>${g.hawks.filter(h => !h.leaving && !h.away).length}</b><span>hawks</span></div>
+            <div><b>${g.lurkers.length}</b><span>lurkers</span></div>`;
         $('island-row').classList.toggle('living', g.world.living);
     }
 
@@ -383,7 +391,10 @@ export class UI {
             set(f + '-v', Math.round(v));
         };
         set('sub', `Generation ${c.generation} · ${c.lifeStage} · age ${Math.floor(c.age)}`);
-        set('status', c.dead ? `${c.cause.charAt(0).toUpperCase() + c.cause.slice(1)}.` : c.status + (c.ready && c.action !== 'mate' ? ' · ready for a partner' : ''));
+        const left = c.busyLeft;
+        const ill = c.plague > 0 ? ' · has the plague' : c.poison > 0.2 ? ' · poisoned' : '';
+        set('status', c.dead ? `${c.cause.charAt(0).toUpperCase() + c.cause.slice(1)}.`
+            : c.status + (left > 0.4 ? ` (${Math.ceil(left)}s)` : '') + ill + (c.ready && c.action !== 'mate' ? ' · ready for a partner' : ''));
         w('energy', c.energy / c.maxEnergy * 100);
         set('sight', `${c.sightNow.toFixed(1)} of ${c.genes.sight.toFixed(1)}${c.t.swimmer ? ' · swims' : ''}`);
         w('health', c.health);
@@ -407,6 +418,8 @@ export class UI {
                 <dt>Temperature now</dt><dd data-f="temp"></dd>
                 <dt>Moisture</dt><dd>${b.moisture}</dd>
                 <dt>Food</dt><dd data-f="food"></dd>
+                <dt>Poison</dt><dd data-f="tox"></dd>
+                <dt>Soil</dt><dd data-f="soil"></dd>
                 <dt>Height</dt><dd data-f="height"></dd>
                 <dt>Walking</dt><dd>${isWalkable(t) ? Math.round(b.speed * 100) + '% speed' : 'impossible'}</dd>
                 <dt>Nomes here</dt><dd data-f="here"></dd>
@@ -418,7 +431,12 @@ export class UI {
         const set = (f, v) => { const el = body.querySelector(`[data-f="${f}"]`); if (el && el.textContent !== String(v)) el.textContent = v; };
         set('temp', Math.round(g.climate(t).temp));
         const cap = g.world.capFor(t), bloom = g.world.bloom[t.i];
-        set('food', (cap ? `${t.food.toFixed(2)} / ${cap}${t.biome === 0 ? ' seaweed' : ''}` : 'none') + (bloom > 0.04 ? ` + ${bloom.toFixed(2)} moonflowers` : ''));
+        const extra = [['fruit', t.fruit], ['nuts', t.nuts], ['mushrooms', t.shroom], ['roots', t.roots]].filter(([, v]) => v > 0.03).map(([k, v]) => `${v.toFixed(2)} ${k}`);
+        set('food', [(cap ? `${t.food.toFixed(2)} / ${cap.toFixed(2)} ${t.biome === 0 ? 'seaweed' : 'greens'}` : ''), ...extra, bloom > 0.04 ? `${bloom.toFixed(2)} moonflowers` : ''].filter(Boolean).join(', ') || 'none');
+        set('tox', t.biome === 0 ? 'none' : `${Math.round(t.tox * 100)}%${t.tox > 0.35 ? ', warning colors' : ''}`);
+        const marks = [t.lava > 0 ? `lava, cools in ${Math.ceil(t.lava)}s` : '', t.fire > 0 ? 'on fire' : '', t.burrow > 0.15 ? 'burrow' : '', t.trail > 0.18 ? `trail ${Math.round(t.trail * 100)}%` : '',
+            t.fert > 0.05 ? `fertile ${Math.round(t.fert * 100)}%` : '', t.work > 0.02 ? `${t.biome === 0 ? 'dam' : 'work'} ${Math.round(t.work * 100)}%` : ''].filter(Boolean);
+        set('soil', marks.join(', ') || 'plain');
         set('height', t.height.toFixed(2));
         set('here', g.creatures.filter(c => g.world.tileAt(c.x, c.z) === t).length);
     }

@@ -6,19 +6,24 @@ PGNome is a small evolution sandbox in the browser. A handful of creatures, the 
 
 ## How it plays
 
-- **24 genes, all with trade-offs.** Size, speed, sight, heat and wet liking, sociability, lifespan, metabolism, fur, skin tone, night life, webbed feet, curiosity, twins, pickiness, legs, body length, plumpness, eyes, horns, tail, pattern and colors. Every gene helps somewhere and costs something, and how much depends on season, weather, time of day and terrain. Fur warms in snow but soaks in rain. Dark skin soaks up sunshine, but only by day. Webbed feet cross shallow water. Three eyes see through fog. Horns win food fights but draw lightning. Picky Nomes only pair with similar colors, which can split a population.
+- **32 genes, all with trade-offs.** Size, speed, sight, heat and wet liking, sociability, lifespan, metabolism, fur, skin tone, night life, webbed feet, curiosity, twins, pickiness, legs, body length, plumpness, eyes, horns, tail, pattern, colors, jaw, claws, poison tolerance, taste, alertness, parental care, building drive and immunity. Every gene helps somewhere and costs something, and how much depends on season, weather, time of day and terrain. Fur warms in snow but soaks in rain. Dark skin soaks up sunshine, but only by day. Webbed feet cross shallow water. Three eyes see through fog. Horns win food fights but draw lightning. Picky Nomes only pair with similar colors, which can split a population.
+- **Everything takes time.** Eating comes in portions: greens are quick, nuts take long unless the jaw is strong, roots need claws. Alert Nomes look up between bites and eat slower. Courting, caring for young, digging and building all take seconds that are missing elsewhere, and a busy Nome notices predators late.
+- **Seven kinds of food.** Greens, fruit in summer, nuts in autumn that last into winter, mushrooms after rain, roots for diggers, seaweed for swimmers and moonflower nectar at night.
+- **The poison race.** Plants that get eaten a lot turn bitter, show warning colors and spread their poison to neighbors. Poison costs them growth, so it fades where nobody grazes. Nomes answer with poison tolerance or a good taste that spits bitter food out.
+- **Nomes change the island.** Walking wears trails into the ground, which are quick to walk but grow less food. Diggers make burrows that shelter from hawks, hail and cold. Builders dam shallow water into new land and plant seeds that turn sand into meadow and meadow into forest. Diggers drain marshes. Droppings and the dead make soil fertile.
 - **Seasons.** Spring and summer are rich, winter is lean and cold. Populations boom and crash, and the survivors shape the next generation.
 - **Generated bodies.** Every Nome body is built from its genes: torso length and shape, two, four or six legs, one to three eyes, horns, tail, spots or stripes, fur spikes, webbed feet, feelers, a crest, glowing night eyes and skin tone. Rare jumps in body genes create new body plans.
 - **Day, night and 16 kinds of weather.** Clear, cloudy, windy, drizzle, rain, downpour, thunderstorm, hail, fog, heat wave, sandstorm, snow, blizzard, frost, rainbow and northern lights. Each one changes temperature, moisture, plant growth, sight or energy use. Night is cold and dark, day Nomes sleep while night Nomes forage.
 - **Things to watch.** Drifting clouds with shadows, rain streaks, snow, hail, dust, autumn leaves, fireflies on summer nights, lightning bolts, burning forests, a rainbow after rain and northern lights in winter.
 - **An archipelago.** A main island and two or three smaller ones, separated by shallow straits. Only swimmers cross, so populations on the islands drift apart. On a living island, low sea levels open land bridges.
 - **Niches.** Seaweed grows in shallow water and only swimmers can graze it. Moonflowers open at night and wilt at dawn, so night Nomes get food the day Nomes sleep through. Middays are hot, which pushes day Nomes into the shade.
-- **Hawks.** Hawks hunt by day. They pick small, lone, colorful or sleeping Nomes on open ground. Forests and water give cover, sharp eyes and company spot them early, horns scare them off. Their number follows the population, and they can be switched off.
+- **Predators that evolve.** Hawks hunt from the air and pick small, lone, colorful, busy or sleeping Nomes on open ground. Lurkers lie in wait in marsh, forest and meadow and strike at Nomes that do not see them. Both carry genes (dive speed, sharp eyes, size, night hunting and stealth for hawks; camouflage, strike speed, venom, size and habitat for lurkers), live from what they catch and raise young when well fed. So the hunters follow the Nomes: night Nomes breed owl-like night hawks, alert Nomes breed better camouflage. Forests, burrows and water give cover, alertness and company spot danger early, caring parents guard their young.
+- **Disasters.** Earthquakes open rifts of water and push up rock. Volcanoes pour lava downhill, cover the sky in ash for months, turn the soil fertile and build new land where lava meets the sea. Tsunamis flood low coasts. Wildfires race through dry forests and leave fertile meadow. Plague spreads where Nomes crowd. Disasters come now and then, can be switched off, or unleashed from the settings.
 - **Two island types.** A classic island stays as you shape it. A living island changes on its own: the sea rises and falls, a wandering hot spot pushes mountains up, rain wears them down, and forests spread or retreat with moisture and grazing.
 - **Island records.** Each seed has a fixed island name. Runs are scored by years survived, generations, peak population and goals, and the best runs show up on a records board per island and overall.
 - **Your tools.** Inspect, carry Nomes, scatter food and paint terrain: meadow, forest, water, sand, marsh and rock. Water blocks paths, rock raises the ground and is cold.
-- **Read-outs.** Population graph with season bands (plus land area on living islands), gene pool ranges, body plan shares, island size and height, a log, and nine goals.
-- **Statistics.** A statistics window with seven tabs: overview and a year table, population, land and hawks over time, the spread and drift of every gene, body plans, causes of death, weather and food sources, and notable Nomes you can jump to.
+- **Read-outs.** Population graph with season bands (plus land area on living islands), gene pool ranges, body plan shares, island size and height, a log, and fourteen goals.
+- **Statistics.** A statistics window with nine tabs: overview and a year table, population, land and predators over time, the spread and drift of every gene, body plans, food and the poison race, predators and how their genes evolve, disasters, causes of death, weather and the marks Nomes leave on the land, and notable Nomes you can jump to.
 - **Saves itself.** The game autosaves to the browser and offers "Continue" on the next visit.
 
 ## Controls
@@ -56,7 +61,7 @@ The game is a static page with no backend, no accounts and no secrets.
 
 | File | Purpose |
 | --- | --- |
-| `js/config.js` | Biomes, genes, goals and balance numbers |
+| `js/config.js` | Biomes, genes, foods, predator genes, goals and balance numbers |
 | `js/world.js` | Island generation, living terrain, plants, path search |
 | `js/creature.js` | Nome genes and behaviour |
 | `js/body.js` | Generated Nome bodies and skin patterns |
@@ -64,7 +69,8 @@ The game is a static page with no backend, no accounts and no secrets.
 | `js/sky.js` | Rain, snow and fog rendering |
 | `js/scores.js` | Island names, scores and the records board |
 | `js/stats.js` | The statistics window and its charts |
-| `js/predator.js` | Hawks |
+| `js/predator.js` | Hawks and lurkers, their genes and hunting |
+| `js/disasters.js` | Earthquakes, volcanoes, tsunamis, wildfires, plague, lava and heat |
 | `js/validate.js` | Cleans saves and records read from localStorage |
 | `js/game.js` | Simulation loop, seasons, breeding, goals, saving |
 | `js/ui.js` | Panels, graph, log and overlays |

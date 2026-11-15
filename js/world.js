@@ -21,7 +21,15 @@ const berryColor = new THREE.Color(0xe8c547);
 const kelpColor = new THREE.Color(0x2e8f6e), kelpPale = new THREE.Color(0x6a8f5a);
 // Shallow water grows seaweed. Moonflowers open only at night.
 const KELP_CAP = 0.55, KELP_REGROW = 0.008;
-const BLOOM_CAP = [0, 0.15, 0.5, 0.3, 0.6, 0];
+const BLOOM_CAP = [0, 0.15, 0.5, 0.3, 0.6, 0, 0];
+// Food caps per biome: water, sand, meadow, forest, marsh, rock, lava.
+export const FRUIT_CAP = [0, 0.05, 0.18, 0.6, 0.1, 0, 0];
+export const NUT_CAP = [0, 0, 0.05, 0.5, 0, 0.28, 0];
+export const SHROOM_CAP = [0, 0, 0.08, 0.35, 0.5, 0, 0];
+export const ROOT_CAP = [0, 0.3, 0.5, 0.3, 0.4, 0.1, 0];
+const fruitColor = new THREE.Color(0xd8343a), toxColor = new THREE.Color(0x8a3fb8);
+const shroomColor = new THREE.Color(0xd9c7a3), shroomTox = new THREE.Color(0xe0322a);
+const bushTox = new THREE.Color(0x7a4a9a);
 const flowerMat = new THREE.MeshBasicMaterial({ color: 0xe4f2ff, fog: false });
 const tmpC = new THREE.Color();
 
@@ -55,8 +63,12 @@ export class World {
         this.materials = BIOMES.map((b, i) => new THREE.MeshStandardMaterial({
             color: b.color,
             roughness: i === B.WATER ? 0.35 : 0.92,
-            metalness: 0
+            metalness: 0,
+            emissive: i === B.LAVA ? 0xff3a00 : 0x000000,
+            emissiveIntensity: i === B.LAVA ? 0.9 : 0
         }));
+        this.glowT = 0;
+        this.slowAcc = 0;
         // The sea is see-through, so the seabed shows how deep the water is.
         const water = this.materials[B.WATER];
         water.transparent = true;
@@ -73,6 +85,8 @@ export class World {
         this.bfsStamp = new Uint32Array(n);
         this.bfsGen = 0;
         this.bfsQueue = new Int32Array(n);
+        // Heat from lava and fire around each tile, refreshed by the disasters.
+        this.heat = new Float32Array(n);
 
         this.buildMeshes();
         this.buildDecor();
@@ -149,6 +163,7 @@ export class World {
         const { e, m, cap } = this.baseFields();
         this.cap = cap;
         const rand = mulberry32(this.seed + 17);
+        const toxNoise = makeNoise(this.seed + 313);
         const s = this.size;
         for (let i = 0; i < s * s; i++) {
             const x = i % s, z = (i - x) / s;
@@ -161,10 +176,13 @@ export class World {
             else if (m[i] < 0.36) biome = B.SAND;
             const t = {
                 i, x, z, biome, height: 0, rh: 0, food: 0, jitter: rand(),
-                elev: e[i], elev0: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0
+                elev: e[i], elev0: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0, trail: 0, fert: 0
             };
             t.height = t.rh = this.heightFor(t, SEA);
             t.food = this.capFor(t) * (0.5 + rand() * 0.5);
+            // Some plants start out poisonous, in patches.
+            const tn = toxNoise(x / s * 4 + 9, z / s * 4 + 9, 2);
+            this.initExtras(t, clamp((tn - 0.5) * 2.2, 0.03, 0.85), rand());
             this.tiles.push(t);
         }
     }
@@ -182,13 +200,36 @@ export class World {
                 elev0: row[6] ?? e[i], wet0: row[7] ?? m[i], pend: -1, pendN: 0
             };
             if (biome === B.WATER && height >= WATER_H) t.height = t.rh = this.heightFor(t, SEA);
+            this.initExtras(t, row[12] ?? 0.05, rand());
+            if (row.length > 8) {
+                [t.fruit, t.nuts, t.shroom, t.roots, t.tox, t.fert, t.trail, t.burrow, t.work] = row.slice(8, 17).map(v => clamp(v ?? 0, 0, 3));
+                t.tox = clamp(t.tox, 0, 1);
+            }
+            if (biome === B.LAVA) t.lava = 30;
             this.tiles.push(t);
         });
     }
 
     serialize() {
         const r = v => Math.round(v * 1000) / 1000;
-        return this.tiles.map(t => [t.biome, r(t.height), r(t.food), r(t.elev), r(t.wet), r(t.veg), r(t.elev0), r(t.wet0)]);
+        return this.tiles.map(t => [t.biome, r(t.height), r(t.food), r(t.elev), r(t.wet), r(t.veg), r(t.elev0), r(t.wet0),
+            r(t.fruit), r(t.nuts), r(t.shroom), r(t.roots), r(t.tox), r(t.fert), r(t.trail), r(t.burrow), r(t.work)]);
+    }
+
+    // The extra food types and the marks Nomes leave on the ground.
+    initExtras(t, tox, j) {
+        const b = t.biome;
+        t.fruit = FRUIT_CAP[b] * j;
+        t.nuts = NUT_CAP[b] * 0.5;
+        t.shroom = 0;
+        t.roots = ROOT_CAP[b];
+        t.tox = b === B.WATER ? 0 : tox;
+        t.fert = 0;
+        t.trail = 0;
+        t.burrow = 0;
+        t.work = 0;
+        t.lava = 0;
+        t.fire = 0;
     }
 
     // Land steps up with elevation. Water tiles are seabed, lower where the sea is deeper.
@@ -202,6 +243,7 @@ export class World {
 
     materialFor(t) {
         if (t.biome !== B.WATER) return this.materials[t.biome];
+
         const h = t.height;
         return this.seabedMats[h < 0.1 ? 0 : h < 0.2 ? 1 : 2];
     }
@@ -270,6 +312,35 @@ export class World {
         this.flowers.castShadow = false;
         this.bloom = new Float32Array(n);
 
+        const fruitGeo = new THREE.SphereGeometry(0.06, 6, 4);
+        fruitGeo.translate(0, 0.3, 0);
+        this.fruits = make(fruitGeo, new THREE.MeshStandardMaterial({ roughness: 0.5 }));
+        for (let i = 0; i < n; i++) this.fruits.setColorAt(i, fruitColor);
+        const nutGeo = new THREE.SphereGeometry(0.05, 5, 4);
+        nutGeo.scale(1, 0.8, 1.2);
+        nutGeo.translate(0, 0.04, 0);
+        this.nutMesh = make(nutGeo, new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.8 }));
+        const capGeo = new THREE.SphereGeometry(0.07, 7, 4, 0, Math.PI * 2, 0, Math.PI / 2);
+        capGeo.translate(0, 0.08, 0);
+        const stemGeo = new THREE.CylinderGeometry(0.02, 0.025, 0.08, 5);
+        stemGeo.translate(0, 0.04, 0);
+        this.shrooms = make(mergeShroom(capGeo, stemGeo), new THREE.MeshStandardMaterial({ roughness: 0.7 }));
+        for (let i = 0; i < n; i++) this.shrooms.setColorAt(i, shroomColor);
+        const holeGeo = new THREE.CircleGeometry(0.16, 10);
+        holeGeo.rotateX(-Math.PI / 2);
+        holeGeo.translate(0, 0.012, 0);
+        this.burrows = make(holeGeo, new THREE.MeshBasicMaterial({ color: 0x2a1d12 }));
+        this.burrows.castShadow = false;
+        const trailGeo = new THREE.PlaneGeometry(1, 1);
+        trailGeo.rotateX(-Math.PI / 2);
+        trailGeo.translate(0, 0.006, 0);
+        this.trailMat = new THREE.MeshStandardMaterial({ color: 0x8b6b45, roughness: 1, transparent: true, opacity: 0.55, depthWrite: false });
+        this.trails = make(trailGeo, this.trailMat);
+        this.trails.castShadow = false;
+        const damGeo = new THREE.BoxGeometry(1, 1, 1);
+        damGeo.translate(0, 0.5, 0);
+        this.dams = make(damGeo, new THREE.MeshStandardMaterial({ color: 0x7a5a36, roughness: 1, flatShading: true }));
+
         for (const t of this.tiles) this.updateDecor(t);
         this.updatePlants();
     }
@@ -307,9 +378,10 @@ export class World {
     }
 
     // How much food a tile can hold. Shallow water holds seaweed, deep water nothing.
+    // Trampled paths hold fewer plants, fertile soil more.
     capFor(t) {
         if (t.biome === B.WATER) return t.height >= 0.12 ? KELP_CAP : 0;
-        return BIOMES[t.biome].food;
+        return BIOMES[t.biome].food * (1 - t.trail * 0.5) * (1 + t.fert * 0.3);
     }
 
     setBush(t) {
@@ -332,9 +404,12 @@ export class World {
             else {
                 tmpC.copy(dryColor).lerp(lushColor, Math.min(full, 1));
                 if (full > 1) tmpC.lerp(berryColor, Math.min(1, (full - 1) * 0.8));
+                // Poisonous plants show warning colors.
+                if (t.tox > 0.2) tmpC.lerp(bushTox, Math.min(0.75, (t.tox - 0.2) * 1.3));
             }
             this.bushes.setColorAt(t.i, tmpC);
         }
+        this.setExtras(t);
         const b = this.bloom ? this.bloom[t.i] : 0;
         if (b > 0.04) {
             const s = 0.8 + b * 2.4;
@@ -348,18 +423,54 @@ export class World {
         }
     }
 
-    updatePlants() {
-        for (const t of this.tiles) this.setBush(t);
-        this.bushes.instanceMatrix.needsUpdate = true;
-        this.flowers.instanceMatrix.needsUpdate = true;
-        if (this.bushes.instanceColor) this.bushes.instanceColor.needsUpdate = true;
+    // Fruit, nuts, mushrooms, burrows, trails and dams.
+    setExtras(t) {
+        const j = t.jitter, top = t.rh;
+        const place = (im, amount, min, x, z, sx, sy, sz, color) => {
+            if (amount < min) { im.setMatrixAt(t.i, HIDDEN); return; }
+            tmpP.set(t.x + x, top, t.z + z);
+            tmpQ.setFromAxisAngle(UP, j * 7);
+            tmpS.set(sx, sy, sz);
+            tmpM.compose(tmpP, tmpQ, tmpS);
+            im.setMatrixAt(t.i, tmpM);
+            if (color) im.setColorAt(t.i, color);
+        };
+        const fs = 0.6 + Math.min(1, t.fruit / 0.4) * 0.8;
+        tmpC.copy(fruitColor).lerp(toxColor, clamp(t.tox * 1.3, 0, 1));
+        place(this.fruits, t.fruit, 0.05, (0.5 - j) * 0.3, -0.2 + j * 0.1, fs, fs, fs, tmpC);
+        const ns = 0.6 + Math.min(1, t.nuts / 0.3) * 0.7;
+        place(this.nutMesh, t.nuts, 0.05, 0.22 - j * 0.15, 0.15 + j * 0.15, ns, ns, ns, null);
+        const ss = 0.6 + Math.min(1, t.shroom / 0.3) * 0.9;
+        tmpC.copy(shroomColor).lerp(shroomTox, clamp(t.tox * 1.4, 0, 1));
+        place(this.shrooms, t.shroom, 0.04, -0.25 + j * 0.2, 0.25 - j * 0.1, ss, ss, ss, tmpC);
+        const water = t.biome === B.WATER;
+        const bs = 0.5 + t.burrow * 0.6;
+        place(this.burrows, water ? 0 : t.burrow, 0.15, 0.2 - j * 0.4, -0.1, bs, 1, bs * 0.8, null);
+        place(this.trails, water ? 0 : t.trail, 0.18, 0, 0, 0.96, 1, 0.96, null);
+        const ds = Math.min(1, t.work);
+        place(this.dams, water ? t.work : 0, 0.05, 0, 0, 0.9, 0.2 + ds * (WATER_H - t.rh + 0.05) * 5, 0.9, null);
     }
 
-    grow(dt, growth, night = 0) {
+    updatePlants() {
+        for (const t of this.tiles) this.setBush(t);
+        for (const im of [this.bushes, this.flowers, this.fruits, this.nutMesh, this.shrooms, this.burrows, this.trails, this.dams]) {
+            im.instanceMatrix.needsUpdate = true;
+            if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        }
+    }
+
+    grow(dt, env) {
+        const growth = env.growth, night = env.night;
+        this.slowAcc += dt;
+        if (this.slowAcc >= 1) {
+            this.slowTick(this.slowAcc, env);
+            this.slowAcc = 0;
+        }
         for (const t of this.tiles) {
             const b = BIOMES[t.biome];
             const cap = this.capFor(t);
-            const regrow = t.biome === B.WATER ? KELP_REGROW : b.regrow;
+            // Fertile soil grows back faster, poison costs the plant growth.
+            const regrow = (t.biome === B.WATER ? KELP_REGROW : b.regrow) * (1 + t.fert * 1.5) * (1 - t.tox * 0.3);
             if (t.food < cap) {
                 t.food = Math.min(cap, t.food + cap * regrow * growth * dt + (cap > 0 ? 0.0004 * growth * dt : 0));
             } else if (t.food > cap) {
@@ -372,10 +483,164 @@ export class World {
         }
     }
 
+    // Once a second: fruit, nuts, mushrooms and roots, plant poison, and the marks Nomes leave.
+    slowTick(step, env) {
+        const phase = env.phase, g = Math.max(0.3, env.growth);
+        const fruitS = phase < 0.25 ? 0.3 : phase < 0.68 ? 1 : 0;
+        const nutS = phase > 0.5 && phase < 0.76 ? 1 : 0;
+        const shroomS = env.wet > 3 && env.temp > -6 ? Math.min(1, env.wet / 15) * (phase > 0.5 && phase < 0.8 ? 1.6 : 1) : 0;
+        const s = this.size;
+        const tox = this.toxSnap || (this.toxSnap = new Float32Array(s * s));
+        for (let i = 0; i < s * s; i++) tox[i] = this.tiles[i].tox;
+        for (const t of this.tiles) {
+            const b = t.biome;
+            if (b === B.WATER || b === B.LAVA) {
+                t.fruit = t.nuts = t.shroom = 0;
+                t.burrow = 0;
+                t.trail = 0;
+                if (b === B.WATER) t.roots = 0;
+                continue;
+            }
+            const fc = FRUIT_CAP[b] * (1 + t.fert * 0.4);
+            if (fruitS > 0 && t.fruit < fc * fruitS) t.fruit = Math.min(fc, t.fruit + fc * 0.012 * g * fruitS * step);
+            else t.fruit -= t.fruit * (fruitS ? 0.004 : 0.03) * step;
+            const nc = NUT_CAP[b];
+            if (nutS && t.nuts < nc) t.nuts = Math.min(nc, t.nuts + nc * 0.016 * step);
+            else t.nuts -= t.nuts * 0.0015 * step;
+            const sc = SHROOM_CAP[b] * (1 + t.fert * 0.5);
+            if (shroomS > 0 && t.shroom < sc) t.shroom = Math.min(sc, t.shroom + sc * 0.025 * shroomS * step);
+            else t.shroom -= t.shroom * 0.02 * step;
+            const rc = ROOT_CAP[b];
+            if (t.roots < rc) t.roots = Math.min(rc, t.roots + rc * 0.004 * step);
+            // Poison is costly, so it fades where nobody eats. Seeds spread it to neighbors.
+            const x = t.x, z = t.z, i = t.i;
+            const avg = (tox[x > 0 ? i - 1 : i] + tox[x < s - 1 ? i + 1 : i] + tox[z > 0 ? i - s : i] + tox[z < s - 1 ? i + s : i]) / 4;
+            t.tox = clamp(t.tox + (avg - t.tox) * 0.004 * step - (t.tox - 0.03) * 0.0006 * step, 0, 1);
+            t.fert = Math.max(0, t.fert - t.fert * 0.0012 * step);
+            t.trail = Math.max(0, t.trail - 0.0008 * (0.3 + env.growth) * step);
+            t.burrow = Math.max(0, t.burrow - 0.0006 * step * (env.wet > 25 ? 3 : 1));
+        }
+    }
+
+    // Grazing makes plants poisonous over time: the bitter ones survive and spread.
+    grazed(t, amount) {
+        t.tox = Math.min(1, t.tox + amount * 0.06);
+    }
+
+    // ---------- Changes made by Nomes ----------
+
+    dig(t, amount) {
+        if (!isWalkable(t) || t.biome === B.ROCK) return false;
+        t.burrow = Math.min(1, t.burrow + amount);
+        t.roots = Math.max(0, t.roots - amount * 0.1);
+        if (this.living) { t.elev -= 0.0015; t.veg = Math.max(0, t.veg - 0.03); }
+        this.setBush(t);
+        this.markDecor();
+        return true;
+    }
+
+    // Dams fill shallow water until it becomes land. Returns true when it turns to land.
+    buildDam(t, amount) {
+        if (t.biome !== B.WATER || t.height < 0.15) return false;
+        t.work += amount;
+        if (t.work >= 1) {
+            t.work = 0;
+            this.setBiome(t, B.SAND);
+            t.fert = 0.2;
+            return true;
+        }
+        this.setBush(t);
+        this.markDecor();
+        return false;
+    }
+
+    // Seeds turn sand into meadow and meadow into forest.
+    plant(t, amount) {
+        if (t.biome !== B.SAND && t.biome !== B.MEADOW) return false;
+        t.fert = Math.min(1, t.fert + amount * 0.4);
+        if (this.living) t.veg = Math.min(1, t.veg + amount * 0.5);
+        t.work += amount;
+        if (t.work >= 1) {
+            t.work = 0;
+            if (!this.living) this.setBiome(t, t.biome === B.SAND ? B.MEADOW : B.FOREST);
+            return true;
+        }
+        return false;
+    }
+
+    // Channels drain a marsh into meadow.
+    drain(t, amount) {
+        if (t.biome !== B.MARSH) return false;
+        if (this.living) { t.wet = Math.max(0, t.wet - amount * 0.5); t.wet0 = Math.max(0, t.wet0 - amount * 0.35); }
+        t.work += amount;
+        if (t.work >= 1) {
+            t.work = 0;
+            if (!this.living) this.setBiome(t, B.MEADOW);
+            return true;
+        }
+        return false;
+    }
+
+    markDecor() {
+        for (const im of [this.burrows, this.trails, this.dams, this.fruits, this.nutMesh, this.shrooms]) {
+            im.instanceMatrix.needsUpdate = true;
+            if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        }
+    }
+
+    // ---------- Disasters ----------
+
+    ignite(t) {
+        if (!t || t.fire > 0 || t.lava > 0) return false;
+        if (t.biome !== B.FOREST && t.biome !== B.MEADOW && !(t.biome === B.MARSH && t.veg > 0.6)) return false;
+        t.fire = 5 + Math.random() * 5;
+        return true;
+    }
+
+    setLava(t, life) {
+        if (!t) return false;
+        if (this.living) t.elev = Math.max(t.elev, this.seaNow + 0.04);
+        t.biome = B.LAVA;
+        t.lava = life;
+        t.fire = 0;
+        t.food = t.fruit = t.nuts = t.shroom = t.roots = 0;
+        t.burrow = t.trail = t.work = 0;
+        t.pend = -1;
+        t.pendN = 0;
+        t.height = Math.max(this.living ? this.heightFor(t, this.seaNow) : t.height, 0.7);
+        this.applyBiome(t);
+        return true;
+    }
+
+    // Cooled lava turns into fresh, fertile rock.
+    solidify(t) {
+        if (this.living) {
+            t.elev = Math.max(t.elev, this.seaNow + 0.03);
+            t.veg = 0;
+        }
+        t.biome = B.ROCK;
+        t.lava = 0;
+        t.fert = Math.max(t.fert, 0.6);
+        t.tox = 0.03;
+        t.pend = -1;
+        t.pendN = 0;
+        t.height = this.living ? this.heightFor(t, this.seaNow) : Math.max(0.8, t.height) + 0.1;
+        this.applyBiome(t);
+    }
+
+    // An earthquake opens the ground and turns it into water.
+    crack(t) {
+        if (!t || t.biome === B.WATER) return false;
+        if (this.living) { t.elev = Math.min(t.elev, this.seaNow - 0.05); t.elev0 = Math.min(t.elev0, this.seaNow - 0.03); }
+        t.lava = 0;
+        t.fire = 0;
+        return this.setBiome(t, B.WATER);
+    }
+
     climate(t, airTemp, wetShift = 0) {
         const b = BIOMES[t.biome];
         const h = t.biome === B.WATER ? 0.8 : t.height;
-        return { temp: b.temp - (h - 0.8) * 8 + airTemp, moisture: clamp(b.moisture + wetShift, 0, 100) };
+        return { temp: b.temp - (h - 0.8) * 8 + airTemp + this.heat[t.i] * 45, moisture: clamp(b.moisture + wetShift, 0, 100) };
     }
 
     setBiome(t, biome) {
@@ -418,7 +683,8 @@ export class World {
         if (this.bloom) this.bloom[t.i] = 0;
         const mesh = this.meshes[t.i];
         mesh.material = this.materialFor(t);
-        mesh.castShadow = t.biome !== B.WATER;
+        mesh.castShadow = t.biome !== B.WATER && t.biome !== B.LAVA;
+        if (t.biome !== B.LAVA) t.lava = 0;
         this.animating.add(t);
         this.updateDecor(t);
     }
@@ -473,6 +739,7 @@ export class World {
 
         for (let i = 0; i < n; i++) {
             const t = this.tiles[i];
+            if (t.biome === B.LAVA) continue;
             const x = t.x, z = t.z;
             // Uplift, pull back to the base shape, and erosion that smooths peaks.
             const d2 = (x - hot.x) ** 2 + (z - hot.z) ** 2;
@@ -488,7 +755,8 @@ export class World {
             // Moisture follows the weather. Vegetation follows moisture, slowly.
             t.wet += (clamp(t.wet0 + weather.wet / 100 * 0.6, 0, 1) - t.wet) * 0.02 * step;
             if (rel >= 0) {
-                const target = clamp((t.wet - 0.3) * 2.4, 0, 1) * (rel > 0.25 ? 0.4 : 1);
+                // Fertile soil helps plants, trampled paths kill them.
+                const target = clamp((t.wet - 0.3) * 2.4 + t.fert * 0.2, 0, 1) * (rel > 0.25 ? 0.4 : 1) * (1 - t.trail * 0.6);
                 t.veg += (target - t.veg) * 0.009 * step;
                 const cap = BIOMES[t.biome].food;
                 if (cap > 0 && t.food < cap * 0.1) t.veg -= 0.0015 * step;
@@ -589,6 +857,8 @@ export class World {
     }
 
     animate(dt) {
+        this.glowT += dt;
+        this.materials[B.LAVA].emissiveIntensity = 0.75 + Math.sin(this.glowT * 2.2) * 0.25;
         for (const t of this.animating) {
             const diff = t.height - t.rh;
             if (Math.abs(diff) < 0.01) {
@@ -603,6 +873,7 @@ export class World {
     }
 
     applySeason(snow, ice) {
+        this.trailMat.opacity = 0.55 * (1 - snow * 0.8);
         BIOMES.forEach((b, i) => {
             const target = i === B.WATER ? this.iceColor : this.snowColor;
             const amount = i === B.WATER ? ice : snow * b.snow;
@@ -617,7 +888,7 @@ export class World {
     passable(t, swim = false) {
         if (!t) return false;
         if (BIOMES[t.biome].walkable) return true;
-        return swim && t.height >= 0.12;
+        return swim && t.biome === B.WATER && t.height >= 0.12;
     }
 
     bfs(start, maxDepth, swim = false) {
@@ -674,6 +945,17 @@ export class World {
         this.seabedMats.forEach(m => m.dispose());
         this.crownMat.dispose();
     }
+}
+
+function mergeShroom(cap, stem) {
+    const a = cap.toNonIndexed(), b = stem.toNonIndexed();
+    const pos = new Float32Array(a.attributes.position.count * 3 + b.attributes.position.count * 3);
+    pos.set(a.attributes.position.array, 0);
+    pos.set(b.attributes.position.array, a.attributes.position.count * 3);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    return g;
 }
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GENES, BIOMES, B, MATURITY_AGE, MAX_POP, legCount, eyeCount } from './config.js';
+import { GENES, BIOMES, B, MATURITY_AGE, MAX_POP, FOODS, legCount, eyeCount } from './config.js';
 import { rand, clamp, lerp, gauss, randomName } from './rng.js';
 import { isWalkable, WATER_H } from './world.js';
 import { emoteMaterials } from './icons.js';
@@ -8,8 +8,12 @@ import { buildBody, baseColor } from './body.js';
 // Fallbacks for genes that older saves do not have yet.
 const DEFAULTS = {
     legs: 0.5, bodyLen: 1, plump: 0.5, eyes: 0.5, horns: 0.25, tail: 0.5, pattern: 0.2,
-    metabolism: 0.5, fur: 0.3, pigment: 0.5, nocturnal: 0.15, webbing: 0.15, curiosity: 0.4, litter: 0.2, pickiness: 0.3
+    metabolism: 0.5, fur: 0.3, pigment: 0.5, nocturnal: 0.15, webbing: 0.15, curiosity: 0.4, litter: 0.2, pickiness: 0.3,
+    jaw: 0.3, claws: 0.25, toxinRes: 0.2, palate: 0.3, vigilance: 0.3, care: 0.3, builder: 0.2, immunity: 0.3
 };
+// What each job is called while a Nome does it.
+const JOB_TEXT = { burrow: 'Digging a burrow', dam: 'Building a dam', plant: 'Planting seeds', drain: 'Digging a ditch' };
+const JOB_GO = { burrow: 'Looking for a place to dig', dam: 'Heading to the shore to build', plant: 'Carrying seeds', drain: 'Heading into the marsh to dig' };
 
 let nextId = 1;
 export const setNextId = n => { nextId = Math.max(nextId, n); };
@@ -24,7 +28,9 @@ export function speciesTemplate(rnd) {
         hue: r(0, 360), hue2: r(0, 360), legs: r(0.32, 0.7), bodyLen: r(0.85, 1.25), plump: r(0.2, 0.8),
         eyes: r(0.2, 0.8), horns: r(0, 0.6), tail: r(0.1, 0.9), pattern: r(0, 1),
         metabolism: r(0.3, 0.7), fur: r(0.1, 0.6), pigment: r(0.2, 0.8), nocturnal: r(0.05, 0.4),
-        webbing: r(0.1, 0.5), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5)
+        webbing: r(0.1, 0.5), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5),
+        jaw: r(0.1, 0.6), claws: r(0.05, 0.55), toxinRes: r(0.05, 0.4), palate: r(0.1, 0.6), vigilance: r(0.1, 0.6),
+        care: r(0.1, 0.6), builder: r(0.05, 0.5), immunity: r(0.1, 0.5)
     };
 }
 
@@ -112,6 +118,20 @@ export class Creature {
         this.sharing = 0;
         this.fleeTimer = 0;
         this.sightNow = this.genes.sight;
+        this.poison = opts.poison ?? 0;
+        this.plague = opts.plague ?? 0;
+        this.immuneT = opts.immuneT ?? 0;
+        this.seeds = 0;
+        this.meal = null;
+        this.job = null;
+        this.pendingJob = null;
+        this.careChild = null;
+        this.careT = 0;
+        this.guardian = null;
+        this.courtT = 0;
+        this.courtNeed = 2;
+        this.avoid = new Map();
+        this.lastHarm = null;
 
         this.action = 'idle';
         this.status = 'Looking around';
@@ -154,6 +174,7 @@ export class Creature {
             baseBurn: 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015
                 + (legs - 2) / 2 * 0.05 + (eyes - 2) * 0.03 + Math.max(0, g.horns - 0.5) * 0.2 + lenN * 0.12
                 + (g.pattern >= 0.4 ? 0.03 : 0) + g.fur * 0.04
+                + g.jaw * 0.05 + g.claws * 0.03 + g.toxinRes * 0.08 + g.immunity * 0.07 + g.vigilance * 0.02 + g.palate * 0.02
         };
     }
 
@@ -163,7 +184,25 @@ export class Creature {
 
     get ready() {
         return this.adult && !this.dead && this.cooldown <= 0 && this.energy > this.t.maxEnergy * 0.6 && this.health > 50
-            && this.age < this.t.lifespan * 0.9;
+            && this.age < this.t.lifespan * 0.9 && this.poison < 0.3 && this.plague <= 0 && this.action !== 'care';
+    }
+
+    // How absorbed this Nome is in what it does. Absorbed Nomes notice predators late.
+    get distraction() {
+        const a = this.action;
+        const base = a === 'eat' ? 0.6 : a === 'work' ? 0.85 : a === 'mate' ? 0.7 : a === 'care' ? 0.3
+            : a === 'rest' ? (this.status === 'Sleeping' ? 1 : 0.4) : 0.15;
+        return base * (1 - this.genes.vigilance * 0.7);
+    }
+
+    // Seconds left of the current task, for the info panel.
+    get busyLeft() {
+        if (this.action === 'eat' && this.meal) return this.meal.t;
+        if (this.action === 'work' && this.job) return this.job.t;
+        if (this.action === 'care') return this.careT;
+        if (this.action === 'rest') return this.restTimer;
+        if (this.action === 'mate' && this.courtT > 0) return Math.max(0, this.courtNeed - this.courtT);
+        return 0;
     }
 
     get lifeStage() {
@@ -218,7 +257,7 @@ export class Creature {
 
     // Forests shelter from storms and hail, rocks from hail.
     sheltered(tile) {
-        return !!tile && (tile.biome === B.FOREST || (tile.biome === B.ROCK && this.game.weather.now.hail > 0.3));
+        return !!tile && (tile.biome === B.FOREST || tile.burrow > 0.35 || (tile.biome === B.ROCK && this.game.weather.now.hail > 0.3));
     }
 
     step(dt) {
@@ -230,6 +269,10 @@ export class Creature {
 
         const tile = world.tileAt(this.x, this.z);
         if (!tile) { game.kill(this, 'got lost'); return; }
+        if (tile.biome === B.LAVA) { game.kill(this, 'was caught by lava'); return; }
+        if (tile.fire > 0) this.health -= 28 * (1 - g.fur * 0.2) * dt;
+        // Fire and lava nearby interrupt whatever the Nome is doing.
+        if ((tile.fire > 0 || world.heat[tile.i] > 0.5) && this.purpose !== 'escape' && this.action !== 'walk') this.cancelPlans();
         const inWater = !isWalkable(tile);
         const shelter = this.sheltered(tile);
         const climate = game.climate(tile);
@@ -240,7 +283,7 @@ export class Creature {
         // Fur warms, unless it is soaked by rain or water.
         const soaked = inWater ? 0.7 : Math.min(1, w.rain) * 0.6;
         const furWarm = g.fur * 14 * (1 - soaked);
-        const huddle = Math.min(3, this.huddle) * 3.5 * g.sociability;
+        const huddle = Math.min(3, this.huddle) * 3.5 * g.sociability + (this.action === 'rest' && tile.burrow > 0.35 ? 8 : 0);
         // Big bodies keep warm (Bergmann's rule), small ones shed heat.
         const cold = Math.max(0, -dT - furWarm - g.plump * 6 - huddle) / g.size;
         const heat = Math.max(0, dT + g.fur * 9 + g.plump * 6 - g.tail * 4) * (0.55 + 0.45 * g.size);
@@ -251,8 +294,14 @@ export class Creature {
         let burn = (t.baseBurn + d * 1.1) * t.burnMul;
         burn += game.weatherBurn * (shelter ? 0.4 : 1) * (1 - g.tail * 0.3) * (1.15 - 0.15 * g.size);
         if (this.moving) burn += 0.2 * g.speed * g.speed * (1 + g.plump * 0.3) + g.curiosity * 0.08;
+        if (this.action === 'work') burn += 0.3;
+        if (this.plague > 0) burn += 0.35 * (1 - g.immunity * 0.85);
         if (!this.adult) burn *= 0.7;
-        if (this.action === 'rest') burn *= this.status === 'Sleeping' ? 0.7 : 0.8;
+        if (this.action === 'rest') {
+            burn *= this.status === 'Sleeping' ? 0.7 : 0.8;
+            // Droppings make the soil fertile where Nomes rest.
+            tile.fert = Math.min(1, tile.fert + 0.0025 * dt);
+        }
         this.energy -= burn * dt;
         if (this.energy <= 0) {
             this.energy = 0;
@@ -264,15 +313,29 @@ export class Creature {
         const drown = inWater ? 8 * Math.pow(clamp((0.85 - g.webbing) / 0.85, 0, 1), 1.5) * (1 - g.tail * 0.15) : 0;
         if (inWater) this.health -= drown * dt;
         if (w.hail > 0.3 && !shelter) this.health -= 1.2 * w.hail * (1 - g.plump * 0.3) * dt;
-        if (this.energy > 35 && d < 0.8 && drown < 0.2) this.health = Math.min(100, this.health + 1.5 * t.heal * dt);
+        // Poison wears off with a fast metabolism and a strong liver.
+        if (this.poison > 0) {
+            this.health -= this.poison * 7 * dt;
+            this.poison = Math.max(0, this.poison - (0.04 + g.metabolism * 0.06 + g.toxinRes * 0.1) * dt);
+        }
+        if (this.plague > 0) {
+            this.health -= (1 - g.immunity * 0.85) * 2.2 * dt;
+            this.plague -= dt * (0.6 + g.metabolism * 0.6);
+            if (this.plague <= 0) { this.plague = 0; this.immuneT = 240; }
+        }
+        if (this.immuneT > 0) this.immuneT -= dt;
+        const ill = this.poison > 0.2 || this.plague > 0;
+        if (this.energy > 35 && d < 0.8 && drown < 0.2 && !ill && tile.fire <= 0) this.health = Math.min(100, this.health + 1.5 * t.heal * dt);
         if (this.fleeTimer > 0) this.fleeTimer -= dt;
 
         const hungerPenalty = this.energy < 30 ? 30 - this.energy : 0;
         this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - (this.crowded ? 10 : 0) + (w.mood || 0), 0, 100);
 
         if (this.health <= 0) {
-            const cause = this.energy <= 0 ? 'starved' : inWater ? 'drowned' : w.hail > 0.3 && !shelter && d < 0.8 ? 'was hit by hail'
-                : this.coldSide ? 'froze' : 'overheated';
+            const cause = tile.fire > 0 ? 'burned in a wildfire' : this.energy <= 0 ? 'starved' : inWater && drown > 0.2 ? 'drowned'
+                : this.poison > 0.03 ? 'was poisoned' : this.plague > 0 ? 'died of plague'
+                    : d > 0.8 ? (this.coldSide ? 'froze' : 'overheated') : w.hail > 0.3 && !shelter ? 'was hit by hail'
+                        : this.lastHarm || 'died of wounds';
             game.kill(this, cause);
             return;
         }
@@ -291,10 +354,14 @@ export class Creature {
                 if (this.restTimer <= 0 || this.energy < t.maxEnergy * 0.35) this.action = 'idle';
                 break;
             case 'mate': this.court(dt); break;
+            case 'work': this.work(dt); break;
+            case 'care': this.tend(dt); break;
             case 'walk':
                 if (this.moveAlong(dt)) {
                     if (this.purpose === 'food') {
                         this.action = 'eat';
+                    } else if (this.purpose === 'work' && this.pendingJob) {
+                        this.startJob();
                     } else {
                         this.action = 'idle';
                         this.thinkTimer = rand(0.1, 0.8);
@@ -305,7 +372,7 @@ export class Creature {
                 this.moving = false;
         }
 
-        const canRethink = this.action === 'idle' || (this.action === 'walk' && this.purpose !== 'food' && this.purpose !== 'escape');
+        const canRethink = this.action === 'idle' || (this.action === 'walk' && this.purpose !== 'food' && this.purpose !== 'escape' && this.purpose !== 'work');
         if (this.thinkTimer <= 0 && canRethink) this.think();
     }
 
@@ -333,8 +400,19 @@ export class Creature {
         this.lonely = g.sociability > 0.6 && near === 0;
         this.crowded = g.sociability < 0.3 && near > 4;
 
+        // Forget poison spots after a while.
+        if (this.avoid.size) for (const [i, until] of this.avoid) if (until < game.time) this.avoid.delete(i);
+
+        // Run from lava and fire.
+        if (world.heat[start.i] > 0.3 || start.fire > 0) {
+            const near = world.bfs(start, 6, swim);
+            for (const i of near) {
+                if (world.heat[i] < 0.1 && world.tiles[i].fire <= 0 && isWalkable(world.tiles[i])) { this.walkTo(world.pathTo(i), 'escape', 'Fleeing the heat'); return; }
+            }
+        }
+
         if (!isWalkable(start)) {
-            const swimming = swim && start.height >= 0.12 && this.health > 55;
+            const swimming = swim && start.biome === B.WATER && start.height >= 0.12 && this.health > 55;
             if (!swimming) {
                 const visited = world.bfs(start, 8, false);
                 for (const i of visited) {
@@ -359,16 +437,16 @@ export class Creature {
             }
         }
 
-        const bloom = world.bloom;
-        if (hungry || (this.energy < t.maxEnergy * 0.85 && start.food + bloom[start.i] > 0.35)) {
+        if (hungry || (this.energy < t.maxEnergy * 0.85 && this.tileValue(start) > 0.35)) {
             const visited = world.bfs(start, Math.max(1, Math.ceil(sight)), swim);
             let best = null, bestScore = -Infinity, far = null;
             for (const i of visited) {
                 const tl = world.tiles[i];
                 far = i;
-                const f = tl.food + bloom[i] * 1.4;
+                const f = this.tileValue(tl);
                 if (f < 0.15) continue;
-                const score = Math.min(f, 1.6) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
+                // Lurkers learned about by others keep wary Nomes away.
+                const score = Math.min(f, 1.8) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
                 if (score > bestScore) { bestScore = score; best = tl; }
             }
             if (best === start) {
@@ -389,19 +467,26 @@ export class Creature {
         if (this.action === 'idle' && Math.random() < 0.25 + sleepy * 0.5) {
             const asleep = sleepy > 0.45;
             // Sleeping by day out in the open is dangerous. Look for a forest first.
-            if (asleep && night < 0.5 && start.biome !== B.FOREST) {
+            const cosy = tl => tl.biome === B.FOREST || tl.burrow > 0.35;
+            if (asleep && (night < 0.5 || game.seasonIndex === 3) && !cosy(start)) {
                 const near = world.bfs(start, 5, swim);
                 for (const i of near) {
-                    if (world.tiles[i].biome === B.FOREST) { this.walkTo(world.pathTo(i), 'shelter', 'Looking for a place to sleep'); return; }
+                    if (cosy(world.tiles[i])) { this.walkTo(world.pathTo(i), 'shelter', world.tiles[i].burrow > 0.35 ? 'Crawling into a burrow' : 'Looking for a place to sleep'); return; }
                 }
             }
             this.action = 'rest';
-            this.restTimer = asleep ? rand(3, 6) : rand(1.2, 3.5);
+            // A slow metabolism needs longer sleep.
+            this.restTimer = (asleep ? rand(3, 6) : rand(1.2, 3.5)) * (1.3 - g.metabolism * 0.6);
             this.status = asleep ? 'Sleeping' : 'Resting';
             this.moving = false;
             return;
         }
         if (this.action === 'walk') return;
+
+        // Builders and diggers sometimes pick a job instead of wandering.
+        const winterish = game.seasonIndex >= 2 ? 0.08 : 0;
+        const urge = (g.builder * 0.3 + g.claws * (0.12 + winterish + (game.hawks.length ? 0.06 : 0))) * (this.energy > t.maxEnergy * 0.6 ? 1 : 0.15);
+        if (this.adult && Math.random() < urge && this.planWork(start)) return;
 
         // Curious Nomes look further and like far places.
         const visited = world.bfs(start, 4 + Math.round(g.curiosity * 6), swim);
@@ -473,42 +558,212 @@ export class Creature {
             const grip = legs === 2 ? 0 : legs === 4 ? 0.3 : 0.55;
             const flat = legs === 2 ? 1.06 : legs === 4 ? 1 : 0.92;
             const base = BIOMES[here.biome].speed;
-            terrain = (base + (1 - base) * grip) * flat * (1 - g.webbing * 0.1);
+            // Trampled paths are quick to walk. Claws are clumsy on the flat.
+            terrain = (base + (1 - base) * grip) * flat * (1 - g.webbing * 0.1) * (1 + here.trail * 0.3) * (1 - g.claws * 0.12);
+            here.trail = Math.min(1, here.trail + dt * 0.012 * (0.5 + g.size * 0.5) * (legs / 4));
         } else {
             terrain = 0.3 + g.webbing * 0.6 + g.tail * 0.15;
         }
         const wind = 1 - 0.15 * game.weather.now.wind * (1.25 - g.size * 0.25 - g.tail * 0.4);
         const panic = this.fleeTimer > 0 ? 1.4 : 1;
-        const sp = g.speed * terrain * (1 - g.plump * 0.12) * wind * panic * (this.adult ? 1 : 0.75) * dt;
+        const sick = 1 - Math.min(0.5, this.poison * 0.3) - (this.plague > 0 ? 0.25 : 0);
+        const sp = sick * g.speed * terrain * (1 - g.plump * 0.12) * wind * panic * (this.adult ? 1 : 0.75) * dt;
         if (dist <= sp) { this.x = tx; this.z = tz; }
         else { this.x += dx / dist * sp; this.z += dz / dist * sp; }
         if (dist > 0.001) this.heading = Math.atan2(dx, dz);
         this.moving = true;
     }
 
+    // Food this Nome could eat on a tile, as a rough energy value. Wary Nomes see warning colors.
+    tileValue(tl) {
+        if (this.avoid.has(tl.i)) return 0;
+        const g = this.genes;
+        if (tl.tox > 0.3 && g.palate > 0.45 && tl.tox - g.toxinRes * 0.8 > 0.15) return 0;
+        const bloom = this.game.world.bloom[tl.i];
+        if (tl.biome === B.WATER) return tl.food * (0.6 + g.webbing * 0.5) + bloom;
+        let v = tl.food + bloom * 1.4 + tl.fruit * 1.5 + tl.shroom * 1.2 + tl.nuts * (0.6 + g.jaw * 1.8);
+        if (g.claws > 0.3) v += tl.roots * (0.3 + g.claws);
+        return v;
+    }
+
+    // Seconds one portion takes. Jaws crack nuts, claws dig roots, alert Nomes keep looking up.
+    handleTime(kind) {
+        const g = this.genes;
+        let h = FOODS[kind].handle * 0.34;
+        if (kind === 'nuts') h *= 1.5 - g.jaw * 1.2;
+        else if (kind === 'roots') h *= 1.6 - g.claws * 1.3;
+        else if (kind === 'seaweed') h *= 1.3 - g.webbing * 0.5;
+        else h *= 1 + g.jaw * 0.15;
+        return h * (1 + g.vigilance * 0.6);
+    }
+
+    amountOf(tile, kind) {
+        if (kind === 'nectar') return this.game.world.bloom[tile.i];
+        if (kind === 'greens' || kind === 'seaweed') return tile.food;
+        return tile[kind];
+    }
+
+    chooseFood(tile) {
+        const water = tile.biome === B.WATER;
+        const kinds = water ? ['nectar', 'seaweed'] : ['nectar', 'fruit', 'nuts', 'shroom', 'greens', 'roots'];
+        let best = null, bestV = 0;
+        for (const k of kinds) {
+            if (k === 'roots' && this.genes.claws < 0.3) continue;
+            const a = this.amountOf(tile, k);
+            if (a < 0.03) continue;
+            const v = FOODS[k].energy * Math.min(a, 0.15) / this.handleTime(k);
+            if (v > bestV) { bestV = v; best = k; }
+        }
+        return best;
+    }
+
+    // Eating comes in portions. Each takes time, and the Nome is distracted meanwhile.
     eat(dt, tile) {
         this.moving = false;
-        const bloom = this.game.world.bloom;
-        if (tile.food + bloom[tile.i] < 0.03 || this.energy >= this.t.maxEnergy - 2) {
+        const g = this.genes, game = this.game;
+        if (this.energy >= this.t.maxEnergy - 2) { this.meal = null; this.action = 'idle'; this.thinkTimer = rand(0.2, 0.6); return; }
+        if (!this.meal) {
+            const kind = this.chooseFood(tile);
+            if (!kind) { this.action = 'idle'; this.thinkTimer = rand(0.2, 0.6); return; }
+            // A good taste catches poison before it is swallowed.
+            const dose = tile.tox * FOODS[kind].tox;
+            if (dose > 0.12 + g.toxinRes * 0.7 && Math.random() < g.palate * 0.85) {
+                this.avoid.set(tile.i, game.time + 60);
+                game.stats.poison.spat++;
+                this.status = `Spat out bitter ${FOODS[kind].name.toLowerCase()}`;
+                this.action = 'idle';
+                this.thinkTimer = rand(0.3, 0.8);
+                return;
+            }
+            const h = this.handleTime(kind);
+            this.meal = { kind, t: h, total: h };
+        }
+        const kind = this.meal.kind;
+        this.status = FOODS[kind].verb + (this.sharing > 0 && g.horns > 0.5 ? ', pushing others away' : g.vigilance > 0.6 ? ', looking around' : '');
+        this.meal.t -= dt;
+        if (this.meal.t > 0) return;
+        this.meal = null;
+        // When the patch is shared, horns win the food fight.
+        const share = this.sharing > 0 ? 0.6 + g.horns * 0.8 : 1;
+        const want = 0.12 * g.size * share;
+        const got = Math.min(want, this.amountOf(tile, kind));
+        if (got <= 0) return;
+        if (kind === 'nectar') game.world.bloom[tile.i] -= got;
+        else if (kind === 'greens' || kind === 'seaweed') tile.food -= got;
+        else tile[kind] -= got;
+        this.energy += got * FOODS[kind].energy;
+        game.stats.food[kind] = (game.stats.food[kind] || 0) + got;
+        if (kind === 'fruit') this.seeds = Math.min(1, this.seeds + got * 2);
+        if (kind === 'greens' || kind === 'fruit' || kind === 'shroom') game.world.grazed(tile, got);
+        const dose = tile.tox * FOODS[kind].tox;
+        const harm = got * Math.max(0, dose - g.toxinRes) * 5;
+        if (harm > 0.01) {
+            if (this.poison < 0.2 && this.poison + harm >= 0.2) game.stats.poison.cases++;
+            this.poison = Math.min(3, this.poison + harm);
+            this.status = 'Feeling sick';
+            if (this.poison > 0.25) this.avoid.set(tile.i, game.time + 90);
+        }
+    }
+
+    // ---------- Work: burrows, dams, seeds and ditches ----------
+
+    planWork(start) {
+        const g = this.genes, world = this.game.world, game = this.game;
+        const near = Array.from(world.bfs(start, 4, false));
+        const dist = near.map(i => world.bfsDist[i]);
+        let best = null, bestS = 0.12;
+        near.forEach((i, k) => {
+            const tl = world.tiles[i];
+            if (!isWalkable(tl) || tl.fire > 0 || world.heat[i] > 0.2) return;
+            const d = dist[k] * 0.06;
+            const consider = (kind, target, score) => { if (score - d > bestS) { bestS = score - d; best = { kind, stand: tl, target }; } };
+            if (g.claws > 0.25 && tl.biome !== B.ROCK && tl.biome !== B.MARSH && tl.burrow < 0.6) {
+                consider('burrow', tl, g.claws * (1 - tl.burrow) * (game.seasonIndex >= 2 || game.hawks.length ? 0.9 : 0.5));
+            }
+            if (g.claws > 0.45 && tl.biome === B.MARSH) consider('drain', tl, g.claws * 0.5);
+            if (this.seeds > 0.1 && g.builder > 0.2 && (tl.biome === B.SAND || (tl.biome === B.MEADOW && tl.food < 0.6))) {
+                consider('plant', tl, g.builder * this.seeds * (tl.biome === B.SAND ? 1 : 0.7));
+            }
+            if (g.builder > 0.35) {
+                for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const w = world.get(tl.x + dx, tl.z + dz);
+                    if (w && w.biome === B.WATER && w.height >= 0.18) consider('dam', w, g.builder * (0.6 + w.work * 0.8));
+                }
+            }
+        });
+        if (!best) return false;
+        this.pendingJob = best;
+        if (best.stand === start) { this.startJob(); return true; }
+        world.bfs(start, 5, false);
+        this.walkTo(world.pathTo(best.stand.i), 'work', JOB_GO[best.kind]);
+        return true;
+    }
+
+    startJob() {
+        const j = this.pendingJob, g = this.genes;
+        this.pendingJob = null;
+        if (!j) { this.action = 'idle'; return; }
+        const dur = j.kind === 'burrow' ? 7 / (0.4 + g.claws * 1.2) : j.kind === 'dam' ? 9 / (0.4 + g.builder * 1.1)
+            : j.kind === 'plant' ? 4 / (0.4 + g.builder) : 8 / (0.4 + g.claws);
+        this.job = { ...j, t: dur, total: dur };
+        this.action = 'work';
+        this.path = [];
+        this.moving = false;
+        this.status = JOB_TEXT[j.kind];
+        if (j.target !== j.stand) this.heading = Math.atan2(j.target.x - this.x, j.target.z - this.z);
+    }
+
+    work(dt) {
+        const j = this.job, g = this.genes, game = this.game, world = game.world;
+        this.moving = false;
+        if (!j || this.energy < this.t.maxEnergy * 0.3) { this.job = null; this.action = 'idle'; return; }
+        j.t -= dt;
+        this.status = JOB_TEXT[j.kind];
+        if (j.t > 0) return;
+        this.job = null;
+        this.action = 'idle';
+        this.thinkTimer = rand(0.3, 1);
+        let changed = false, done = false;
+        const t = j.target;
+        if (j.kind === 'burrow') done = world.dig(t, 0.5);
+        else if (j.kind === 'drain') changed = done = world.drain(t, 0.1 + g.claws * 0.12);
+        else if (j.kind === 'plant') { changed = done = world.plant(t, 0.2 + g.builder * 0.15); this.seeds = Math.max(0, this.seeds - 0.3); }
+        else if (j.kind === 'dam') changed = done = world.buildDam(t, 0.06 + g.builder * 0.08);
+        const w = game.stats.work;
+        if (j.kind === 'burrow' && done) w.burrows++;
+        if (changed) {
+            w[j.kind === 'dam' ? 'dams' : j.kind === 'plant' ? 'planted' : 'drained']++;
+            game.onWork(j.kind, t, this);
+        }
+    }
+
+    // ---------- Parents ----------
+
+    tend(dt) {
+        const ch = this.careChild;
+        this.careT -= dt;
+        const d = ch ? Math.hypot(ch.x - this.x, ch.z - this.z) : 99;
+        if (!ch || ch.dead || ch.adult || this.careT <= 0 || this.energy < this.t.maxEnergy * 0.3 || d > 7) {
+            if (ch && ch.guardian === this) ch.guardian = null;
+            this.careChild = null;
             this.action = 'idle';
-            this.thinkTimer = rand(0.2, 0.6);
+            this.thinkTimer = rand(0.3, 1);
             return;
         }
-        // When the patch is shared, horns win the food fight.
-        const share = this.sharing > 0 ? 0.6 + this.genes.horns * 0.8 : 1;
-        let bite = 0.35 * this.genes.size * share * dt;
-        // Moonflower nectar first: it is rich, but only there at night.
-        const nectar = Math.min(bloom[tile.i], bite);
-        bloom[tile.i] -= nectar;
-        bite -= nectar;
-        const take = Math.min(tile.food, bite);
-        tile.food -= take;
-        this.energy += take * 80 + nectar * 110;
-        const food = this.game.stats.food;
-        if (nectar) food.nectar += nectar;
-        if (take) { if (tile.biome === B.WATER) food.seaweed += take; else food.plants += take; }
-        this.status = nectar > 0 ? 'Drinking moonflower nectar' : tile.biome === B.WATER ? 'Grazing seaweed'
-            : this.sharing > 0 && this.genes.horns > 0.5 ? 'Eating, pushing others away' : 'Eating';
+        this.status = `Caring for ${ch.name}`;
+        if (d > 0.9) {
+            const goal = this.game.world.tileAt(ch.x, ch.z);
+            if (goal && isWalkable(goal)) this.stepToward(ch.x, ch.z, dt);
+            else this.moving = false;
+            return;
+        }
+        this.moving = false;
+        // Parents pass on food to their young.
+        const give = Math.min(this.energy - this.t.maxEnergy * 0.4, 2.5 * this.genes.care * dt);
+        if (give > 0 && ch.energy < ch.t.maxEnergy - 2) {
+            this.energy -= give;
+            ch.energy += give * 0.9;
+        }
     }
 
     // Runs for cover when a hawk dives. Swimmers may dive into water.
@@ -518,11 +773,14 @@ export class Creature {
         if (!start || this.dead || this.dragged) return;
         if (this.partner) this.stopCourting();
         this.fleeTimer = 3;
+        this.meal = null;
+        if (this.job) { this.job = null; }
         if (start.biome === B.FOREST) { this.status = 'Hiding under the trees'; return; }
+        if (start.burrow > 0.35) { this.status = 'Hiding in a burrow'; return; }
         const near = world.bfs(start, 2, this.t.swimmer);
         for (const i of near) {
             const tl = world.tiles[i];
-            if (tl.biome === B.FOREST || (this.t.swimmer && tl.biome === B.WATER)) {
+            if (tl.biome === B.FOREST || tl.burrow > 0.35 || (this.t.swimmer && tl.biome === B.WATER)) {
                 this.walkTo(world.pathTo(i), 'escape', 'Fleeing from a hawk');
                 return;
             }
@@ -536,6 +794,9 @@ export class Creature {
         this.path = [];
         this.mateTimer = 0;
         this.mateGiveUp = 14;
+        this.courtT = 0;
+        // Picky Nomes court longer, attractive partners win them over faster.
+        this.courtNeed = Math.max(0.6, 1.2 + this.genes.pickiness * 2.2 - p.t.attract * 0.6);
         this.status = `Courting ${p.name}`;
     }
 
@@ -561,7 +822,9 @@ export class Creature {
         const d = Math.hypot(p.x - this.x, p.z - this.z);
         if (d < 0.7) {
             this.moving = false;
-            if (this.id < p.id) this.game.breed(this, p);
+            this.courtT += dt;
+            this.status = `Dancing for ${p.name}`;
+            if (this.id < p.id && this.courtT >= this.courtNeed && p.courtT >= p.courtNeed * 0.5) this.game.breed(this, p);
             return;
         }
         if (d < 1.6) {
@@ -588,6 +851,9 @@ export class Creature {
 
     cancelPlans() {
         if (this.partner) this.stopCourting();
+        this.job = null;
+        this.pendingJob = null;
+        this.meal = null;
         this.path = [];
         this.action = 'idle';
         this.thinkTimer = 0;
@@ -632,7 +898,9 @@ export class Creature {
         } else {
             for (const l of this.legs) l.hip.rotation.x *= 0.8;
             this.pivot.position.y = this.legLen;
-            this.pivot.rotation.x = this.action === 'eat' ? 0.3 + Math.sin(time * 12) * 0.12 : 0;
+            this.pivot.rotation.x = this.action === 'eat' ? 0.3 + Math.sin(time * (12 - this.genes.jaw * 4)) * 0.12
+                : this.action === 'work' ? 0.45 + Math.sin(time * 16) * 0.25 : 0;
+            if (this.action === 'work') for (const l of this.legs) l.hip.rotation.x = Math.sin(time * 16 + l.phase) * 0.5;
         }
         // Fast metabolism breathes faster.
         const breath = 2 + this.genes.metabolism * 4;
@@ -649,7 +917,7 @@ export class Creature {
         const mats = emoteMaterials();
         let emote = null;
         if (this.action === 'mate') emote = mats.love;
-        else if (this.health < 35) emote = mats.sick;
+        else if (this.health < 35 || this.poison > 0.3 || this.plague > 0) emote = mats.sick;
         else if (this.discomfort > 0.8) emote = this.coldSide ? mats.cold : mats.hot;
         else if (this.energy < 25 && this.action !== 'eat') emote = mats.hungry;
         else if (this.action === 'rest' && this.restTimer > 1.5) emote = mats.sleep;
@@ -673,7 +941,8 @@ export class Creature {
         return {
             id: this.id, name: this.name, x: r(this.x), z: r(this.z), genes,
             generation: this.generation, parents: this.parents, age: r(this.age),
-            energy: r(this.energy), health: r(this.health), cooldown: r(this.cooldown), children: this.children
+            energy: r(this.energy), health: r(this.health), cooldown: r(this.cooldown), children: this.children,
+            poison: r(this.poison), plague: r(this.plague), immuneT: r(this.immuneT)
         };
     }
 }

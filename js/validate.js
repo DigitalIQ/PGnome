@@ -1,4 +1,4 @@
-import { GENES, GOALS, MODES, WEATHER, MAX_POP, BIOMES } from './config.js';
+import { GENES, GOALS, MODES, WEATHER, MAX_POP, BIOMES, HAWK_GENES, LURKER_GENES, DISASTERS } from './config.js';
 
 // Everything read back from localStorage passes through here. Other pages on the same
 // origin (all GitHub Pages sites of one account share it) or a hand-edited save can put
@@ -23,6 +23,19 @@ function cleanGenes(g) {
     return out;
 }
 
+function cleanTable(table, g) {
+    const out = {};
+    if (!isObj(g)) return null;
+    for (const [k, def] of Object.entries(table)) out[k] = num(g[k], def.min, def.max, (def.min + def.max) / 2);
+    return out;
+}
+
+const sub = (o, keys, max = 1e9) => {
+    const src = isObj(o) ? o : {}, out = {};
+    for (const k of keys) out[k] = num(src[k], 0, max, 0);
+    return out;
+};
+
 function cleanNumberMap(m, maxKeys = 40, maxVal = 1e9) {
     const out = {};
     if (!isObj(m)) return out;
@@ -46,8 +59,15 @@ function cleanStats(s) {
         peakPop: int(s.peakPop, 0, MAX_POP), twins: int(s.twins, 0, 1e9), strikes: int(s.strikes, 0, 1e9),
         burned: int(s.burned, 0, 1e9), causes: cleanNumberMap(s.causes), plans: cleanNumberMap(s.plans, 10),
         weather: cleanNumberMap(s.weather, Object.keys(WEATHER).length),
-        hawk: { dives: int(hawk.dives, 0, 1e9), catches: int(hawk.catches, 0, 1e9), escapes: int(hawk.escapes, 0, 1e9) },
-        food: { plants: num(food.plants, 0, 1e9), seaweed: num(food.seaweed, 0, 1e9), nectar: num(food.nectar, 0, 1e9), fed: int(food.fed, 0, 1e9) },
+        hawk: sub(hawk, ['dives', 'catches', 'escapes', 'born', 'died']),
+        lurker: sub(s.lurker, ['strikes', 'catches', 'escapes', 'born', 'died']),
+        food: sub(food, ['plants', 'greens', 'fruit', 'nuts', 'shroom', 'roots', 'seaweed', 'nectar', 'fed']),
+        poison: sub(s.poison, ['cases', 'spat']), plague: sub(s.plague, ['cases']),
+        work: sub(s.work, ['burrows', 'dams', 'planted', 'drained']),
+        landMade: int(s.landMade, 0, 1e9),
+        disasters: Array.isArray(s.disasters) ? s.disasters.slice(-60).filter(e => isObj(e) && DISASTERS[e.kind]).map(e => ({
+            y: int(e.y, 1, 1e6, 1), kind: e.kind, before: int(e.before, 0, MAX_POP), after: e.after == null ? null : int(e.after, 0, MAX_POP)
+        })) : [],
         deathAge: { sum: num(age.sum, 0, 1e12), n: int(age.n, 0, 1e9) },
         years
     };
@@ -62,7 +82,7 @@ export function cleanSave(d) {
     for (const row of tiles) {
         if (!Array.isArray(row) || row.length < 3) return null;
         const r = [int(row[0], 0, BIOMES.length - 1), num(row[1], 0.01, 6, 0.8), num(row[2], 0, 3, 0)];
-        for (let k = 3; k < Math.min(row.length, 8); k++) r.push(num(row[k], -2, 3, 0.4));
+        for (let k = 3; k < Math.min(row.length, 17); k++) r.push(num(row[k], -2, 3, k < 8 ? 0.4 : 0));
         cleanTiles.push(r);
     }
     if (!Array.isArray(d.creatures) || !d.creatures.length) return null;
@@ -74,7 +94,8 @@ export function cleanSave(d) {
         generation: int(c.generation, 1, 1e6, 1),
         parents: Array.isArray(c.parents) && c.parents.length === 2 && c.parents.every(p => NAME.test(p || '')) ? [c.parents[0], c.parents[1]] : null,
         age: num(c.age, 0, 1e5), energy: num(c.energy, 0, 200, 70), health: num(c.health, 0, 100, 100),
-        cooldown: num(c.cooldown, -1e5, 1e5, 8), children: int(c.children, 0, 1e6)
+        cooldown: num(c.cooldown, -1e5, 1e5, 8), children: int(c.children, 0, 1e6),
+        poison: num(c.poison, 0, 3, 0), plague: num(c.plague, 0, 60, 0), immuneT: num(c.immuneT, 0, 1e4, 0)
     }));
     if (!creatures.length) return null;
     const goals = {};
@@ -85,8 +106,22 @@ export function cleanSave(d) {
     const longHistory = Array.isArray(d.longHistory) ? d.longHistory.slice(-1000).filter(isObj).map(h => ({
         t: num(h.t, 0, 1e9), pop: int(h.pop, 0, MAX_POP), land: int(h.land, 0, 4096), hawks: int(h.hawks, 0, 20),
         sat: int(h.sat, 0, MAX_POP), water: int(h.water, 0, MAX_POP),
-        g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : []
+        g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : [],
+        lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096),
+        hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null,
+        lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null
     })) : [];
+    const predators = Array.isArray(d.predators) ? d.predators.slice(0, 20).filter(isObj).map(p => {
+        const table = p.kind === 'hawk' ? HAWK_GENES : p.kind === 'lurker' ? LURKER_GENES : null;
+        if (!table) return null;
+        return { kind: p.kind, genes: cleanTable(table, p.genes), energy: num(p.energy, -10, 300, 60), age: num(p.age, 0, 1e5), gen: int(p.gen, 1, 1e6, 1),
+            x: num(p.x, 0, side - 1, side / 2), z: num(p.z, 0, side - 1, side / 2) };
+    }).filter(p => p && p.genes) : [];
+    const pool = isObj(d.predatorPool) ? d.predatorPool : {};
+    const predatorPool = {};
+    if (cleanTable(HAWK_GENES, pool.hawk)) predatorPool.hawk = cleanTable(HAWK_GENES, pool.hawk);
+    if (cleanTable(LURKER_GENES, pool.lurker)) predatorPool.lurker = cleanTable(LURKER_GENES, pool.lurker);
+    const dis = isObj(d.disasters) ? { next: num(d.disasters.next, 0, 1e6, 200), ash: num(d.disasters.ash, 0, 1, 0) } : null;
     const template = isObj(d.template) ? cleanGenes(d.template) : null;
     const weather = isObj(d.weather) && WEATHER[d.weather.key] ? { key: d.weather.key, timer: num(d.weather.timer, 0, 120, 20) } : null;
     const run = isObj(d.run) ? { id: str(d.run.id, 40, /^[a-z0-9]{1,40}$/) || undefined, start: num(d.run.start, 0, 1e9), startGoals: int(d.run.startGoals, 0, 100) } : null;
@@ -100,6 +135,9 @@ export function cleanSave(d) {
         history, longHistory, goals,
         mutationRate: num(d.mutationRate, 0, 3, 1),
         hawksOn: d.hawksOn !== false,
+        disastersOn: d.disastersOn !== false,
+        disasters: dis,
+        predators, predatorPool,
         mode: MODES[d.mode] ? d.mode : 'classic',
         template: template && Object.keys(template).length ? template : null,
         weather,

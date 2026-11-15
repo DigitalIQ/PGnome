@@ -274,7 +274,19 @@ function frame(now) {
     if (game.world) sky.update(dt, game, controls.target, camera, !game.paused && !state.overlay);
     input.update(dt);
     controls.update();
+    // Earthquakes and eruptions shake the view.
+    let sx = 0, sz = 0;
+    if (game.shake > 0) {
+        game.shake = Math.max(0, game.shake - dt * 0.8);
+        const k = Math.min(1, game.shake) * 0.35;
+        sx = Math.sin(now * 0.061) * k;
+        sz = Math.cos(now * 0.047) * k;
+        camera.position.x += sx;
+        camera.position.z += sz;
+    }
     renderer.render(scene, camera);
+    camera.position.x -= sx;
+    camera.position.z -= sz;
     uiTimer -= dt;
     if (uiTimer <= 0) {
         uiTimer = 0.25;

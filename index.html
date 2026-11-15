@@ -110,8 +110,22 @@
                     <summary>World</summary>
                     <label class="check">
                         <input type="checkbox" id="hawks" checked>
-                        <span>Hawks hunt by day</span>
+                        <span>Predators hunt (hawks and lurkers)</span>
                     </label>
+                    <label class="check">
+                        <input type="checkbox" id="disasters" checked>
+                        <span>Disasters happen now and then</span>
+                    </label>
+                    <div class="btn-row trigger-row">
+                        <select id="disaster-kind" aria-label="Disaster">
+                            <option value="quake">Earthquake</option>
+                            <option value="volcano">Volcano</option>
+                            <option value="tsunami">Tsunami</option>
+                            <option value="wildfire">Wildfire</option>
+                            <option value="plague">Plague</option>
+                        </select>
+                        <button id="btn-disaster" class="btn ghost">Unleash</button>
+                    </div>
                     <label class="slider">
                         <span>Mutation rate <output id="mut-out">1.0</output></span>
                         <input type="range" id="mutation" min="0" max="3" step="0.1" value="1">

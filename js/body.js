@@ -25,6 +25,7 @@ const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
 const hornMat = new THREE.MeshStandardMaterial({ color: 0xefe3c4, roughness: 0.6 });
 const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
 const footGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
+const clawMat = new THREE.MeshStandardMaterial({ color: 0x2b2420, roughness: 0.5 });
 const stalkGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 5);
 stalkGeo.translate(0, 0.5, 0);
 // Night Nomes' pupils glow in the dark. main.js sets the glow each frame.
@@ -137,6 +138,17 @@ export function buildBody(g, seed) {
             leg.scale.set(1 + g.plump * 0.4, legLen + 0.06, 1 + g.plump * 0.4);
             leg.castShadow = true;
             hip.add(leg);
+            // Claws: little hooks on each foot.
+            if (g.claws > 0.4) {
+                const cl = 0.03 + (g.claws - 0.4) * 0.1;
+                for (const k of [-1, 0, 1]) {
+                    const claw = new THREE.Mesh(hornGeo, clawMat);
+                    claw.scale.set(0.012, cl, 0.012);
+                    claw.position.set(k * 0.022, -(legLen + 0.05), 0.04);
+                    claw.rotation.x = 1.3;
+                    hip.add(claw);
+                }
+            }
             // Webbed feet: flat paddles that grow with the gene.
             if (g.webbing > 0.3) {
                 const foot = new THREE.Mesh(footGeo, accentMat);
@@ -199,6 +211,17 @@ export function buildBody(g, seed) {
         ear.rotation.z = -side * 0.4;
         ear.castShadow = true;
         pivot.add(ear);
+    }
+
+    // A strong jaw shows as a heavy lower snout.
+    if (g.jaw > 0.35) {
+        const jw = 0.05 + g.jaw * 0.07;
+        const nose = at(0.97);
+        const jaw = new THREE.Mesh(GEO.ball, limbMat);
+        jaw.scale.set(jw * 1.3, jw * 0.7, jw * 1.2);
+        jaw.position.set(0, P.y - nose.r * 0.45, nose.z - 0.01);
+        jaw.castShadow = true;
+        pivot.add(jaw);
     }
 
     // Horns grow once the gene passes the middle.
