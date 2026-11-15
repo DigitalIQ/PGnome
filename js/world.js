@@ -18,7 +18,18 @@ const UP = new THREE.Vector3(0, 1, 0);
 const dryColor = new THREE.Color(0x9a8a4e);
 const lushColor = new THREE.Color(0x4f9e35);
 const berryColor = new THREE.Color(0xe8c547);
+const kelpColor = new THREE.Color(0x2e8f6e), kelpPale = new THREE.Color(0x6a8f5a);
+// Shallow water grows seaweed. Moonflowers open only at night.
+const KELP_CAP = 0.55, KELP_REGROW = 0.008;
+const BLOOM_CAP = [0, 0.15, 0.5, 0.3, 0.6, 0];
+const flowerMat = new THREE.MeshBasicMaterial({ color: 0xe4f2ff, fog: false });
 const tmpC = new THREE.Color();
+
+function segDist(px, pz, ax, az, bx, bz) {
+    const vx = bx - ax, vz = bz - az;
+    const t = clamp(((px - ax) * vx + (pz - az) * vz) / (vx * vx + vz * vz), 0, 1);
+    return Math.hypot(px - ax - vx * t, pz - az - vz * t);
+}
 
 export function isWalkable(t) {
     return !!t && BIOMES[t.biome].walkable;
@@ -81,21 +92,54 @@ export class World {
     get center() { return (this.size - 1) / 2; }
 
     // Raw elevation (e) and wetness (m) per tile, both 0..1. Deterministic per seed.
+    // A main island with two or three smaller islands around it. Shallow channels
+    // separate them, so only swimmers cross, unless the sea falls on a living island.
+    satellites() {
+        const rnd = mulberry32(this.seed + 4242);
+        const c = (this.size - 1) / 2;
+        const n = this.size >= 40 ? 2 + (rnd() < 0.55 ? 1 : 0) : 0;
+        const start = rnd() * Math.PI * 2;
+        const out = [];
+        for (let k = 0; k < n; k++) {
+            const a = start + (k / n) * Math.PI * 2 + (rnd() - 0.5) * 0.7;
+            const r = 3.4 + rnd() * 1.6;
+            const dist = 14.2 + rnd() * 1.2;
+            out.push({ x: c + Math.cos(a) * dist, z: c + Math.sin(a) * dist, r, peak: 0.14 + rnd() * 0.08 });
+        }
+        return out;
+    }
+
     baseFields() {
         const elevation = makeNoise(this.seed);
         const wetness = makeNoise(this.seed + 7919);
         const s = this.size, c = (s - 1) / 2;
+        // The main island keeps its old size; bigger maps leave room for the satellites.
+        const mainR = Math.min(c, 15.5) * (s >= 40 ? 0.84 : 1);
+        const sats = this.satellites();
         const e = new Float32Array(s * s), m = new Float32Array(s * s), cap = new Float32Array(s * s);
         for (let z = 0; z < s; z++) {
             for (let x = 0; x < s; x++) {
                 const nx = x / s, nz = z / s;
-                const dx = (x - c) / c, dz = (z - c) / c;
-                const d = Math.sqrt(dx * dx + dz * dz);
+                const dist = Math.hypot(x - c, z - c);
+                const d = dist / mainR;
                 const i = z * s + x;
-                e[i] = elevation(nx * 3.4, nz * 3.4, 4) * 0.95 + 0.11 - Math.pow(d, 2.6) * 0.45;
+                const noise = elevation(nx * 3.4 * s / 32, nz * 3.4 * s / 32, 4);
+                let h = noise * 0.95 + 0.11 - Math.pow(d, 2.6) * 0.45;
+                for (const sat of sats) {
+                    const ds = Math.hypot(x - sat.x, z - sat.z) / sat.r;
+                    h = Math.max(h, SEA + sat.peak * (1 - ds * ds) + (noise - 0.5) * 0.14);
+                }
+                for (const sat of sats) {
+                    const dt = Math.hypot(x - sat.x, z - sat.z);
+                    // A ring of shallow water keeps each satellite apart...
+                    if (dt > sat.r * 0.95 && dt < sat.r + 2.4) h = clamp(h, SEA - 0.065, SEA - 0.022);
+                    // ...and a shallow strait leads to the main island, so swimmers can cross.
+                    if (dt > sat.r * 0.95 && segDist(x, z, c, c, sat.x, sat.z) < 2.2 && h < SEA - 0.065) h = SEA - 0.058 + (noise - 0.5) * 0.02;
+                }
+                e[i] = h;
                 m[i] = wetness(nx * 3 + 40, nz * 3 + 40, 3);
                 // The map edge always stays sea, also when the land rises.
-                cap[i] = 1.2 - Math.max(0, d - 0.74) * 3.4;
+                cap[i] = 1.2 - Math.max(0, dist / c - 0.86) * 5;
             }
         }
         return { e, m, cap };
@@ -120,7 +164,7 @@ export class World {
                 elev: e[i], elev0: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0
             };
             t.height = t.rh = this.heightFor(t, SEA);
-            t.food = BIOMES[biome].food * (0.5 + rand() * 0.5);
+            t.food = this.capFor(t) * (0.5 + rand() * 0.5);
             this.tiles.push(t);
         }
     }
@@ -220,6 +264,11 @@ export class World {
         this.rocks = make(rockGeo, rockMat);
         this.bushes = make(bushGeo, bushMat);
         for (let i = 0; i < n; i++) this.bushes.setColorAt(i, lushColor);
+        const flowerGeo = new THREE.OctahedronGeometry(0.09, 0);
+        flowerGeo.translate(0, 0.08, 0);
+        this.flowers = make(flowerGeo, flowerMat);
+        this.flowers.castShadow = false;
+        this.bloom = new Float32Array(n);
 
         for (const t of this.tiles) this.updateDecor(t);
         this.updatePlants();
@@ -257,39 +306,69 @@ export class World {
         this.bushes.instanceMatrix.needsUpdate = true;
     }
 
+    // How much food a tile can hold. Shallow water holds seaweed, deep water nothing.
+    capFor(t) {
+        if (t.biome === B.WATER) return t.height >= 0.12 ? KELP_CAP : 0;
+        return BIOMES[t.biome].food;
+    }
+
     setBush(t) {
-        const cap = BIOMES[t.biome].food;
+        const cap = this.capFor(t);
         if (cap <= 0 || t.food < 0.04) {
             this.bushes.setMatrixAt(t.i, HIDDEN);
-            return;
+        } else {
+            const water = t.biome === B.WATER;
+            const full = clamp(t.food / Math.max(cap, 0.3), 0, 2.2);
+            const s = 0.35 + Math.min(full, 1) * 0.75 + Math.max(0, full - 1) * 0.35;
+            const off = t.biome === B.FOREST ? 0.28 : 0.12;
+            tmpP.set(t.x + (0.5 - t.jitter) * off * 2, t.rh, t.z + off);
+            tmpQ.setFromAxisAngle(UP, t.jitter * 9);
+            // Seaweed grows tall and thin.
+            if (water) tmpS.set(s * 0.55, s * 1.7, s * 0.55);
+            else tmpS.set(s, s * 0.85, s);
+            tmpM.compose(tmpP, tmpQ, tmpS);
+            this.bushes.setMatrixAt(t.i, tmpM);
+            if (water) tmpC.copy(kelpPale).lerp(kelpColor, Math.min(full, 1));
+            else {
+                tmpC.copy(dryColor).lerp(lushColor, Math.min(full, 1));
+                if (full > 1) tmpC.lerp(berryColor, Math.min(1, (full - 1) * 0.8));
+            }
+            this.bushes.setColorAt(t.i, tmpC);
         }
-        const full = clamp(t.food / Math.max(cap, 0.3), 0, 2.2);
-        const s = 0.35 + Math.min(full, 1) * 0.75 + Math.max(0, full - 1) * 0.35;
-        const off = t.biome === B.FOREST ? 0.28 : 0.12;
-        tmpP.set(t.x + (0.5 - t.jitter) * off * 2, t.rh, t.z + off);
-        tmpQ.setFromAxisAngle(UP, t.jitter * 9);
-        tmpS.set(s, s * 0.85, s);
-        tmpM.compose(tmpP, tmpQ, tmpS);
-        this.bushes.setMatrixAt(t.i, tmpM);
-        tmpC.copy(dryColor).lerp(lushColor, Math.min(full, 1));
-        if (full > 1) tmpC.lerp(berryColor, Math.min(1, (full - 1) * 0.8));
-        this.bushes.setColorAt(t.i, tmpC);
+        const b = this.bloom ? this.bloom[t.i] : 0;
+        if (b > 0.04) {
+            const s = 0.8 + b * 2.4;
+            tmpP.set(t.x + (t.jitter - 0.5) * 0.5, t.rh, t.z - 0.18 + t.jitter * 0.1);
+            tmpQ.setFromAxisAngle(UP, t.jitter * 5);
+            tmpS.set(s, s, s);
+            tmpM.compose(tmpP, tmpQ, tmpS);
+            this.flowers.setMatrixAt(t.i, tmpM);
+        } else {
+            this.flowers.setMatrixAt(t.i, HIDDEN);
+        }
     }
 
     updatePlants() {
         for (const t of this.tiles) this.setBush(t);
         this.bushes.instanceMatrix.needsUpdate = true;
+        this.flowers.instanceMatrix.needsUpdate = true;
         if (this.bushes.instanceColor) this.bushes.instanceColor.needsUpdate = true;
     }
 
-    grow(dt, growth) {
+    grow(dt, growth, night = 0) {
         for (const t of this.tiles) {
             const b = BIOMES[t.biome];
-            if (t.food < b.food) {
-                t.food = Math.min(b.food, t.food + b.food * b.regrow * growth * dt + 0.0004 * growth * dt);
-            } else if (t.food > b.food) {
-                t.food -= (t.food - b.food) * 0.015 * dt;
+            const cap = this.capFor(t);
+            const regrow = t.biome === B.WATER ? KELP_REGROW : b.regrow;
+            if (t.food < cap) {
+                t.food = Math.min(cap, t.food + cap * regrow * growth * dt + (cap > 0 ? 0.0004 * growth * dt : 0));
+            } else if (t.food > cap) {
+                t.food -= (t.food - cap) * 0.015 * dt;
             }
+            // Moonflowers open at night and wilt soon after sunrise.
+            const bc = BLOOM_CAP[t.biome] * Math.max(0.35, Math.min(1, growth));
+            if (night > 0.5) this.bloom[t.i] += (bc - this.bloom[t.i]) * 0.08 * dt;
+            else this.bloom[t.i] -= this.bloom[t.i] * 0.3 * dt;
         }
     }
 
@@ -334,7 +413,8 @@ export class World {
     }
 
     applyBiome(t) {
-        t.food = Math.min(t.food, BIOMES[t.biome].food * (this.living ? 0.6 : 0.3));
+        t.food = Math.min(t.food, this.capFor(t) * (this.living ? 0.6 : 0.3));
+        if (this.bloom) this.bloom[t.i] = 0;
         const mesh = this.meshes[t.i];
         mesh.material = this.materialFor(t);
         mesh.castShadow = t.biome !== B.WATER;

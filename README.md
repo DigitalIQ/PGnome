@@ -1,5 +1,7 @@
 # PGNome: Island Evolution
 
+**Play it:** https://digitaliq.github.io/PGnome/
+
 PGNome is a small evolution sandbox in the browser. A handful of creatures, the Nomes, live on a generated island. They eat plants, look for partners and try to stay comfortable. Every child inherits a mix of its parents' genes with small mutations. Seasons, food and terrain decide which genes survive. You shape the island, but you never control a Nome directly.
 
 ## How it plays
@@ -9,6 +11,9 @@ PGNome is a small evolution sandbox in the browser. A handful of creatures, the 
 - **Generated bodies.** Every Nome body is built from its genes: torso length and shape, two, four or six legs, one to three eyes, horns, tail, spots or stripes, fur spikes, webbed feet, feelers, a crest, glowing night eyes and skin tone. Rare jumps in body genes create new body plans.
 - **Day, night and 16 kinds of weather.** Clear, cloudy, windy, drizzle, rain, downpour, thunderstorm, hail, fog, heat wave, sandstorm, snow, blizzard, frost, rainbow and northern lights. Each one changes temperature, moisture, plant growth, sight or energy use. Night is cold and dark, day Nomes sleep while night Nomes forage.
 - **Things to watch.** Drifting clouds with shadows, rain streaks, snow, hail, dust, autumn leaves, fireflies on summer nights, lightning bolts, burning forests, a rainbow after rain and northern lights in winter.
+- **An archipelago.** A main island and two or three smaller ones, separated by shallow straits. Only swimmers cross, so populations on the islands drift apart. On a living island, low sea levels open land bridges.
+- **Niches.** Seaweed grows in shallow water and only swimmers can graze it. Moonflowers open at night and wilt at dawn, so night Nomes get food the day Nomes sleep through. Middays are hot, which pushes day Nomes into the shade.
+- **Hawks.** Hawks hunt by day. They pick small, lone, colorful or sleeping Nomes on open ground. Forests and water give cover, sharp eyes and company spot them early, horns scare them off. Their number follows the population, and they can be switched off.
 - **Two island types.** A classic island stays as you shape it. A living island changes on its own: the sea rises and falls, a wandering hot spot pushes mountains up, rain wears them down, and forests spread or retreat with moisture and grazing.
 - **Island records.** Each seed has a fixed island name. Runs are scored by years survived, generations, peak population and goals, and the best runs show up on a records board per island and overall.
 - **Your tools.** Inspect, carry Nomes, scatter food and paint terrain: meadow, forest, water, sand, marsh and rock. Water blocks paths, rock raises the ground and is cold.

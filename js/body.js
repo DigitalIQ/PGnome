@@ -103,7 +103,7 @@ export function describeBody(g) {
     if (kind !== 'plain') parts.push(kind);
     if (g.horns > 0.5) parts.push('horned');
     if (g.fur > 0.6) parts.push('furry');
-    if (g.webbing > 0.55) parts.push('webbed feet');
+    if (g.webbing > 0.45) parts.push('swimmer');
     if (g.curiosity > 0.5) parts.push('feelers');
     if (g.pickiness > 0.6) parts.push('crest');
     if (g.nocturnal > 0.6) parts.push('night eyes');

@@ -735,7 +735,10 @@ details[open] > summary::before { transform: rotate(45deg); }
     border-top: 1px solid var(--line);
 }
 
-.island-row.living { grid-template-columns: repeat(4, 1fr); }
+.island-row { grid-template-columns: repeat(4, 1fr); }
+.island-row.living { grid-template-columns: repeat(5, 1fr); }
+.check { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; font-size: 13px; cursor: pointer; }
+.check input { accent-color: var(--accent); width: 15px; height: 15px; }
 .island-row div { display: flex; flex-direction: column; }
 .island-row b { font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .island-row span { font-size: 11px; color: var(--muted); }

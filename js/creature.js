@@ -23,8 +23,8 @@ export function speciesTemplate(rnd) {
     return {
         hue: r(0, 360), hue2: r(0, 360), legs: r(0.32, 0.7), bodyLen: r(0.85, 1.25), plump: r(0.2, 0.8),
         eyes: r(0.2, 0.8), horns: r(0, 0.6), tail: r(0.1, 0.9), pattern: r(0, 1),
-        metabolism: r(0.3, 0.7), fur: r(0.1, 0.6), pigment: r(0.2, 0.8), nocturnal: r(0, 0.35),
-        webbing: r(0, 0.4), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5)
+        metabolism: r(0.3, 0.7), fur: r(0.1, 0.6), pigment: r(0.2, 0.8), nocturnal: r(0.05, 0.4),
+        webbing: r(0.1, 0.5), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5)
     };
 }
 
@@ -110,6 +110,7 @@ export class Creature {
         this.crowded = false;
         this.huddle = 0;
         this.sharing = 0;
+        this.fleeTimer = 0;
         this.sightNow = this.genes.sight;
 
         this.action = 'idle';
@@ -146,7 +147,7 @@ export class Creature {
             lifespan: g.lifespan * (1.12 - 0.24 * g.metabolism),
             burnMul: 0.78 + 0.44 * g.metabolism,
             heal: 0.7 + 0.8 * g.metabolism,
-            swimmer: g.webbing > 0.55,
+            swimmer: g.webbing > 0.45,
             fogEye: eyes === 1 ? 1.35 : eyes === 3 ? 0.45 : 1,
             nightEye: eyes === 3 ? 1.15 : 1,
             attract: (g.pattern >= 0.4 ? 0.5 : 0) + Math.max(0, g.horns - 0.5) * 1.4 + Math.max(0, lenN - 0.6) * 0.3,
@@ -259,9 +260,12 @@ export class Creature {
             this.health -= 5 * (1 - g.plump * 0.5) * dt;
         }
         if (d > 0.8) this.health -= (d - 0.8) * 10 * dt;
-        if (inWater) this.health -= 8 * (1 - g.webbing * 0.85) * (1 - g.tail * 0.15) * dt;
+        // Webbed feet turn water from deadly into a place to feed.
+        const drown = inWater ? 8 * Math.pow(clamp((0.85 - g.webbing) / 0.85, 0, 1), 1.5) * (1 - g.tail * 0.15) : 0;
+        if (inWater) this.health -= drown * dt;
         if (w.hail > 0.3 && !shelter) this.health -= 1.2 * w.hail * (1 - g.plump * 0.3) * dt;
-        if (this.energy > 35 && d < 0.8 && !inWater) this.health = Math.min(100, this.health + 1.5 * t.heal * dt);
+        if (this.energy > 35 && d < 0.8 && drown < 0.2) this.health = Math.min(100, this.health + 1.5 * t.heal * dt);
+        if (this.fleeTimer > 0) this.fleeTimer -= dt;
 
         const hungerPenalty = this.energy < 30 ? 30 - this.energy : 0;
         this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - (this.crowded ? 10 : 0) + (w.mood || 0), 0, 100);
@@ -355,14 +359,16 @@ export class Creature {
             }
         }
 
-        if (hungry || (this.energy < t.maxEnergy * 0.85 && start.food > 0.35)) {
+        const bloom = world.bloom;
+        if (hungry || (this.energy < t.maxEnergy * 0.85 && start.food + bloom[start.i] > 0.35)) {
             const visited = world.bfs(start, Math.max(1, Math.ceil(sight)), swim);
             let best = null, bestScore = -Infinity, far = null;
             for (const i of visited) {
                 const tl = world.tiles[i];
                 far = i;
-                if (tl.food < 0.15) continue;
-                const score = Math.min(tl.food, 1.6) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
+                const f = tl.food + bloom[i] * 1.4;
+                if (f < 0.15) continue;
+                const score = Math.min(f, 1.6) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
                 if (score > bestScore) { bestScore = score; best = tl; }
             }
             if (best === start) {
@@ -381,8 +387,15 @@ export class Creature {
         const night = game.night;
         const sleepy = night * (1 - g.nocturnal) + (1 - night) * g.nocturnal * 0.7;
         if (this.action === 'idle' && Math.random() < 0.25 + sleepy * 0.5) {
-            this.action = 'rest';
             const asleep = sleepy > 0.45;
+            // Sleeping by day out in the open is dangerous. Look for a forest first.
+            if (asleep && night < 0.5 && start.biome !== B.FOREST) {
+                const near = world.bfs(start, 5, swim);
+                for (const i of near) {
+                    if (world.tiles[i].biome === B.FOREST) { this.walkTo(world.pathTo(i), 'shelter', 'Looking for a place to sleep'); return; }
+                }
+            }
+            this.action = 'rest';
             this.restTimer = asleep ? rand(3, 6) : rand(1.2, 3.5);
             this.status = asleep ? 'Sleeping' : 'Resting';
             this.moving = false;
@@ -465,7 +478,8 @@ export class Creature {
             terrain = 0.3 + g.webbing * 0.6 + g.tail * 0.15;
         }
         const wind = 1 - 0.15 * game.weather.now.wind * (1.25 - g.size * 0.25 - g.tail * 0.4);
-        const sp = g.speed * terrain * (1 - g.plump * 0.12) * wind * (this.adult ? 1 : 0.75) * dt;
+        const panic = this.fleeTimer > 0 ? 1.4 : 1;
+        const sp = g.speed * terrain * (1 - g.plump * 0.12) * wind * panic * (this.adult ? 1 : 0.75) * dt;
         if (dist <= sp) { this.x = tx; this.z = tz; }
         else { this.x += dx / dist * sp; this.z += dz / dist * sp; }
         if (dist > 0.001) this.heading = Math.atan2(dx, dz);
@@ -474,17 +488,43 @@ export class Creature {
 
     eat(dt, tile) {
         this.moving = false;
-        if (tile.food < 0.03 || this.energy >= this.t.maxEnergy - 2) {
+        const bloom = this.game.world.bloom;
+        if (tile.food + bloom[tile.i] < 0.03 || this.energy >= this.t.maxEnergy - 2) {
             this.action = 'idle';
             this.thinkTimer = rand(0.2, 0.6);
             return;
         }
         // When the patch is shared, horns win the food fight.
         const share = this.sharing > 0 ? 0.6 + this.genes.horns * 0.8 : 1;
-        const take = Math.min(tile.food, 0.35 * this.genes.size * share * dt);
+        let bite = 0.35 * this.genes.size * share * dt;
+        // Moonflower nectar first: it is rich, but only there at night.
+        const nectar = Math.min(bloom[tile.i], bite);
+        bloom[tile.i] -= nectar;
+        bite -= nectar;
+        const take = Math.min(tile.food, bite);
         tile.food -= take;
-        this.energy += take * 80;
-        this.status = this.sharing > 0 && this.genes.horns > 0.5 ? 'Eating, pushing others away' : 'Eating';
+        this.energy += take * 80 + nectar * 110;
+        this.status = nectar > 0 ? 'Drinking moonflower nectar' : tile.biome === B.WATER ? 'Grazing seaweed'
+            : this.sharing > 0 && this.genes.horns > 0.5 ? 'Eating, pushing others away' : 'Eating';
+    }
+
+    // Runs for cover when a hawk dives. Swimmers may dive into water.
+    flee() {
+        const world = this.game.world;
+        const start = world.tileAt(this.x, this.z);
+        if (!start || this.dead || this.dragged) return;
+        if (this.partner) this.stopCourting();
+        this.fleeTimer = 3;
+        if (start.biome === B.FOREST) { this.status = 'Hiding under the trees'; return; }
+        const near = world.bfs(start, 2, this.t.swimmer);
+        for (const i of near) {
+            const tl = world.tiles[i];
+            if (tl.biome === B.FOREST || (this.t.swimmer && tl.biome === B.WATER)) {
+                this.walkTo(world.pathTo(i), 'escape', 'Fleeing from a hawk');
+                return;
+            }
+        }
+        this.status = 'Ducking from a hawk';
     }
 
     startCourting(p) {

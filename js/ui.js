@@ -76,6 +76,10 @@ export class UI {
             $('mut-out').textContent = game.mutationRate.toFixed(1);
         });
         $('btn-spawn').addEventListener('click', () => actions.spawnPair());
+        $('hawks').addEventListener('change', e => {
+            game.hawksOn = e.target.checked;
+            game.hawkTimer = 0;
+        });
         $('btn-new').addEventListener('click', () => actions.showStart());
         $('sel-close').addEventListener('click', () => actions.select(null));
         $('btn-panel').addEventListener('click', () => $('right').classList.toggle('open'));
@@ -105,6 +109,7 @@ export class UI {
         game.on('reset', () => {
             $('log').innerHTML = '';
             $('mutation').value = game.mutationRate;
+            $('hawks').checked = game.hawksOn;
             $('mut-out').textContent = game.mutationRate.toFixed(1);
             $('seed-info').textContent = `Seed ${game.seed}`;
             this.lastHistoryLen = -1;
@@ -320,7 +325,8 @@ export class UI {
         const sea = g.world.living ? `<div><b>${g.world.seaNow >= 0.36 ? '+' : ''}${Math.round((g.world.seaNow - 0.36) * 100)}</b><span>sea level</span></div>` : '';
         $('island-row').innerHTML = `<div><b>${st.land}${arrow(st.land, p.land, 2)}</b><span>land tiles</span></div>
             <div><b>${st.peak.toFixed(1)}${arrow(st.peak, p.peak, 0.1)}</b><span>highest</span></div>
-            <div><b>${(st.deep * 10).toFixed(1)}${arrow(st.deep, p.deep, 0.01)}</b><span>deepest</span></div>${sea}`;
+            <div><b>${(st.deep * 10).toFixed(1)}${arrow(st.deep, p.deep, 0.01)}</b><span>deepest</span></div>${sea}
+            <div><b>${g.hawks.filter(h => !h.leaving && !h.away).length}</b><span>hawks</span></div>`;
         $('island-row').classList.toggle('living', g.world.living);
     }
 
@@ -425,7 +431,8 @@ export class UI {
         const g = this.game, body = $('sel-body');
         const set = (f, v) => { const el = body.querySelector(`[data-f="${f}"]`); if (el && el.textContent !== String(v)) el.textContent = v; };
         set('temp', Math.round(g.climate(t).temp));
-        set('food', BIOMES[t.biome].food ? `${t.food.toFixed(2)} / ${BIOMES[t.biome].food}` : 'none');
+        const cap = g.world.capFor(t), bloom = g.world.bloom[t.i];
+        set('food', (cap ? `${t.food.toFixed(2)} / ${cap}${t.biome === 0 ? ' seaweed' : ''}` : 'none') + (bloom > 0.04 ? ` + ${bloom.toFixed(2)} moonflowers` : ''));
         set('height', t.height.toFixed(2));
         set('here', g.creatures.filter(c => g.world.tileAt(c.x, c.z) === t).length);
     }

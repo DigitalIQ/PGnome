@@ -68,7 +68,7 @@ function frameCamera() {
     const c = game.world.center;
     controls.target.set(c, 0.8, c);
     camera.position.set(c + 30, 30, c + 30);
-    camera.zoom = window.innerWidth < 900 ? Math.max(0.5, Math.min(0.8, aspect())) : 0.9;
+    camera.zoom = (window.innerWidth < 900 ? Math.max(0.45, Math.min(0.72, aspect())) : 0.8) * 32 / game.world.size * 1.12;
     camera.updateProjectionMatrix();
     sun.position.set(c + 16, 30, c + 6);
     sun.target.position.set(c, 0, c);

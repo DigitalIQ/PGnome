@@ -1,6 +1,6 @@
 // Tunables for world, simulation and genetics. Times are simulation seconds.
 
-export const MAP_SIZE = 32;
+export const MAP_SIZE = 40;
 export const MAX_POP = 150;
 export const FOUNDERS = 10;
 export const SIM_STEP = 1 / 30;
@@ -29,28 +29,28 @@ export const SEASONS = ['Spring', 'Summer', 'Autumn', 'Winter'];
 // time of day and terrain, so no single value is best everywhere.
 export const GENES = {
     hue: { label: 'Color', min: 0, max: 360, wrap: true, effect: 'Picky Nomes only pair with similar colors. Over time this can split a population.' },
-    size: { label: 'Size', min: 0.6, max: 1.6, effect: 'Keeps warm and resists wind. Needs much more food.' },
+    size: { label: 'Size', min: 0.6, max: 1.6, effect: 'Keeps warm, resists wind and is too big for most hawks. Needs much more food.' },
     speed: { label: 'Speed', min: 0.6, max: 2.4, effect: 'Reaches food first. Burns energy fast while moving.' },
-    sight: { label: 'Sight', min: 3, max: 10, effect: 'Finds food and partners further away. Costs a little energy.' },
+    sight: { label: 'Sight', min: 3, max: 10, effect: 'Finds food and partners further away and spots hawks early. Costs a little energy.' },
     prefTemp: { label: 'Heat liking', min: 0, max: 100, effect: 'The temperature this Nome feels best at. Heat lovers grow big ears.' },
     prefMoisture: { label: 'Wet liking', min: 0, max: 100, effect: 'The moisture this Nome feels best at.' },
-    sociability: { label: 'Sociability', min: 0, max: 1, effect: 'Social Nomes huddle for warmth in the cold but get lonely alone. Loners hate crowds.' },
+    sociability: { label: 'Sociability', min: 0, max: 1, effect: 'Social Nomes huddle for warmth and watch out for hawks together. Loners hate crowds.' },
     lifespan: { label: 'Lifespan', min: 90, max: 220, effect: 'Lives longer and breeds more often. Costs energy every second.' },
     metabolism: { label: 'Metabolism', min: 0, max: 1, effect: 'Fast: grows up and heals quickly. Slow: lives longer on less food.' },
     fur: { label: 'Fur', min: 0, max: 1, effect: 'Warm in cold and snow. Hot in summer, and wet fur in rain stops warming.' },
-    pigment: { label: 'Skin tone', min: 0, max: 1, effect: 'Dark skin soaks up sunshine, light skin reflects it. Matters only in daylight.' },
-    nocturnal: { label: 'Night life', min: 0, max: 1, effect: 'Night Nomes see in the dark and sleep by day. Day Nomes go blind at night.' },
-    webbing: { label: 'Webbed feet', min: 0, max: 1, effect: 'Swims through shallow water and drowns slower. A little slower on land.' },
-    curiosity: { label: 'Curiosity', min: 0, max: 1, effect: 'Roams far and finds new land. Wastes energy walking.' },
+    pigment: { label: 'Skin tone', min: 0, max: 1, effect: 'Dark skin soaks up sunshine, light skin reflects it but stands out to hawks on green ground.' },
+    nocturnal: { label: 'Night life', min: 0, max: 1, effect: 'Night Nomes see in the dark, drink moonflower nectar, dodge the midday heat and the hawks. They sleep by day.' },
+    webbing: { label: 'Webbed feet', min: 0, max: 1, effect: 'Swims to other islands, grazes seaweed and dives away from hawks. A little slower on land.' },
+    curiosity: { label: 'Curiosity', min: 0, max: 1, effect: 'Roams far and finds new food. Wastes energy walking.' },
     litter: { label: 'Twins', min: 0, max: 1, effect: 'Chance of twins. Each birth costs the parents more, children start weaker.' },
     pickiness: { label: 'Pickiness', min: 0, max: 1, effect: 'Only pairs with similar colors, but raises stronger children.' },
     legs: { label: 'Legs', min: 0, max: 1, body: true, effect: 'More legs grip on marsh and rock but are slower on flat ground and cost energy.' },
     bodyLen: { label: 'Body length', min: 0.75, max: 1.6, body: true, effect: 'A long body stores more food. It costs more to carry.' },
     plump: { label: 'Plumpness', min: 0, max: 1, body: true, effect: 'Fat keeps warm and helps survive hunger. Slow and hot in summer.' },
-    eyes: { label: 'Eyes', min: 0, max: 1, body: true, effect: 'Three eyes see through fog and dark. One eye is cheap but nearly blind in fog.' },
-    horns: { label: 'Horns', min: 0, max: 1, body: true, effect: 'Horned Nomes win food fights and attract partners. Lightning likes them.' },
+    eyes: { label: 'Eyes', min: 0, max: 1, body: true, effect: 'Three eyes see through fog and dark and spot hawks. One eye is cheap but nearly blind in fog.' },
+    horns: { label: 'Horns', min: 0, max: 1, body: true, effect: 'Horns win food fights, attract partners and scare off hawks. Lightning likes them.' },
     tail: { label: 'Tail', min: 0, max: 1, body: true, effect: 'Balances in storms, steers when swimming and sheds a little heat.' },
-    pattern: { label: 'Pattern', min: 0, max: 1, body: true, effect: 'Spots and stripes attract partners. Making them costs a little energy.' },
+    pattern: { label: 'Pattern', min: 0, max: 1, body: true, effect: 'Spots and stripes attract partners, but hawks see them too.' },
     hue2: { label: 'Accent color', min: 0, max: 360, wrap: true, body: true, effect: 'Color of spots, stripes and crest. Pure looks.' }
 };
 

@@ -5,6 +5,7 @@ import { Creature, randomGenes, mixGenes, getNextId, setNextId, speciesTemplate 
 import { heartTexture, sparkTexture } from './icons.js';
 import { rand, mulberry32 } from './rng.js';
 import { Weather } from './weather.js';
+import { Hawk } from './predator.js';
 import { islandName, submitRecord } from './scores.js';
 
 export class Game {
@@ -23,6 +24,8 @@ export class Game {
         this.renderTime = 0;
         this.mode = 'classic';
         this.weather = new Weather();
+        this.hawks = [];
+        this.hawksOn = true;
     }
 
     on(name, fn) { (this.listeners[name] ||= []).push(fn); }
@@ -34,6 +37,10 @@ export class Game {
         this.creatures.forEach(c => c.dispose());
         this.dying.forEach(c => c.dispose());
         this.effects.forEach(e => { this.scene.remove(e.sprite); e.sprite.material.dispose(); });
+        (this.hawks || []).forEach(h => h.dispose());
+        this.hawks = [];
+        this.hawkTimer = 4;
+        this.hawkSeen = false;
         if (this.world) this.world.dispose();
         this.creatures = [];
         this.dying = [];
@@ -109,6 +116,7 @@ export class Game {
         this.history = data.history || [];
         this.goals = data.goals || {};
         this.mutationRate = data.mutationRate ?? 1;
+        this.hawksOn = data.hawksOn ?? true;
         setNextId(data.nextId || 1);
         for (const s of data.creatures) {
             const c = new Creature(this, s.x, s.z, s.genes, s);
@@ -136,6 +144,7 @@ export class Game {
             goals: this.goals,
             mutationRate: this.mutationRate,
             mode: this.mode,
+            hawksOn: this.hawksOn,
             template: this.template,
             weather: this.weather.serialize(),
             run: this.run,
@@ -191,7 +200,8 @@ export class Game {
     get sunshine() { return Math.max(0, this.sunHeight) * (1 - this.weather.now.cloud * 0.8); }
 
     // Air temperature and moisture shift with the weather and cool down at night.
-    get airTemp() { return this.seasonTemp + this.weather.now.temp - 3 * this.night; }
+    // Middays are hot, nights cool. Summer middays push day Nomes into the shade.
+    get airTemp() { return this.seasonTemp + this.weather.now.temp + 5 * this.sunshine - 3 * this.night; }
     get sightMul() { return this.weather.now.sight; }
     get weatherBurn() { return this.weather.now.burn; }
     get windSlow() { return 1 - 0.15 * this.weather.now.wind; }
@@ -353,10 +363,11 @@ export class Game {
 
         const w = this.weather.update(dt, season);
         if (w) this.onWeather(w);
-        this.world.grow(dt, this.growth);
+        this.world.grow(dt, this.growth, this.night);
         const changed = this.world.evolve(dt, this.time, this.weather.now);
         if (changed && changed.length) this.onTerrain(changed);
         if (this.weather.now.lightning > 0.6) this.storm(dt);
+        this.stepHawks(dt);
         for (let i = this.creatures.length - 1; i >= 0; i--) {
             const c = this.creatures[i];
             if (c) c.step(dt);
@@ -451,6 +462,32 @@ export class Game {
         }
     }
 
+    // The number of hawks follows the number of Nomes, so small populations get a break.
+    stepHawks(dt) {
+        this.hawkTimer -= dt;
+        if (this.hawkTimer <= 0) {
+            this.hawkTimer = 10;
+            const n = this.creatures.length;
+            const want = this.hawksOn && n >= 14 ? Math.min(6, 1 + Math.floor((n - 14) / 22)) : 0;
+            const active = this.hawks.filter(h => !h.leaving);
+            if (active.length < want) {
+                const a = Math.random() * Math.PI * 2, c = this.world.center;
+                this.hawks.push(new Hawk(this, { x: c + Math.cos(a) * 40, z: c + Math.sin(a) * 40 }));
+                if (!this.hawkSeen) {
+                    this.hawkSeen = true;
+                    this.log('A hawk circles over the island. It hunts by day. Forests and water give cover.', 'death');
+                }
+            } else if (active.length > want) {
+                active[active.length - 1].leaving = true;
+            }
+        }
+        for (let i = this.hawks.length - 1; i >= 0; i--) {
+            const h = this.hawks[i];
+            h.step(dt);
+            if (h.gone) { h.dispose(); this.hawks.splice(i, 1); }
+        }
+    }
+
     onTerrain(tiles) {
         const set = new Set(tiles);
         for (const c of this.creatures) {
@@ -531,6 +568,7 @@ export class Game {
         this.renderTime += dt;
         this.world.animate(dt);
         for (const c of this.creatures) c.render(dt, this.renderTime);
+        for (const h of this.hawks) h.render(dt);
         for (let i = this.dying.length - 1; i >= 0; i--) {
             if (this.dying[i].render(dt, this.renderTime)) {
                 this.dying[i].dispose();
