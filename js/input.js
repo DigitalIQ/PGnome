@@ -45,8 +45,8 @@ export function setupInput({ renderer, camera, controls, scene, game, actions, s
     }
 
     function pickTile() {
-        const hits = ray.intersectObjects(game.world.meshes, false);
-        if (hits.length) return { tile: hits[0].object.userData.tile, point: hits[0].point };
+        const hits = ray.intersectObjects(game.world.pickMeshes, false);
+        if (hits.length) return { tile: game.world.tiles[hits[0].object.tileAt[hits[0].instanceId]], point: hits[0].point };
         if (ray.ray.intersectPlane(seaPlane, tmp)) return { tile: game.world.tileAt(tmp.x, tmp.z), point: tmp.clone() };
         return null;
     }

@@ -32,6 +32,71 @@ const shroomColor = new THREE.Color(0xd9c7a3), shroomTox = new THREE.Color(0xe03
 const bushTox = new THREE.Color(0x7a4a9a);
 const flowerMat = new THREE.MeshBasicMaterial({ color: 0xe4f2ff, fog: false });
 const tmpC = new THREE.Color();
+const tmpM2 = new THREE.Matrix4();
+const tmpC2 = new THREE.Color();
+
+// An instanced mesh that only draws the tiles that use it. Callers address it by tile
+// index; hiding a tile (the HIDDEN matrix) frees its slot, so the GPU never draws
+// thousands of empty instances.
+class SlotMesh extends THREE.InstancedMesh {
+    constructor(geo, mat, n) {
+        super(geo, mat, n);
+        this.count = 0;
+        this.slotOf = new Int32Array(n).fill(-1);
+        this.tileAt = new Int32Array(n);
+        this.cols = null;
+        this.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    }
+
+    setMatrixAt(i, m) {
+        // The base constructor fills every instance before the slot table exists.
+        if (!this.slotOf) return super.setMatrixAt(i, m);
+        let s = this.slotOf[i];
+        if (m === HIDDEN) {
+            if (s >= 0) this.free(i, s);
+            return this;
+        }
+        if (s < 0) {
+            s = this.count++;
+            this.slotOf[i] = s;
+            this.tileAt[s] = i;
+            this.boundingSphere = null;
+            if (this.cols) {
+                super.setColorAt(s, tmpC2.fromArray(this.cols, i * 3));
+                this.instanceColor.needsUpdate = true;
+            }
+        }
+        return super.setMatrixAt(s, m);
+    }
+
+    setColorAt(i, c) {
+        if (!this.slotOf) return super.setColorAt(i, c);
+        if (!this.cols) this.cols = new Float32Array(this.slotOf.length * 3);
+        c.toArray(this.cols, i * 3);
+        const s = this.slotOf[i];
+        if (s >= 0) super.setColorAt(s, c);
+        return this;
+    }
+
+    free(i, s) {
+        const last = --this.count;
+        if (s !== last) {
+            const j = this.tileAt[last];
+            this.getMatrixAt(last, tmpM2);
+            super.setMatrixAt(s, tmpM2);
+            if (this.instanceColor) {
+                this.getColorAt(last, tmpC2);
+                super.setColorAt(s, tmpC2);
+            }
+            this.slotOf[j] = s;
+            this.tileAt[s] = j;
+        }
+        this.slotOf[i] = -1;
+        this.boundingSphere = null;
+        this.instanceMatrix.needsUpdate = true;
+        if (this.instanceColor) this.instanceColor.needsUpdate = true;
+    }
+}
 
 function segDist(px, pz, ax, az, bx, bz) {
     const vx = bx - ax, vz = bz - az;
@@ -52,7 +117,7 @@ export class World {
         this.evolveAcc = 0;
         this.size = saved ? Math.round(Math.sqrt(saved.length)) : MAP_SIZE;
         this.tiles = [];
-        this.meshes = [];
+
         this.animating = new Set();
         this.group = new THREE.Group();
         scene.add(this.group);
@@ -241,6 +306,25 @@ export class World {
         return Math.min(h, 4.3);
     }
 
+    placeTile(t) {
+        const k = this.matKey(t);
+        if (t.mk !== k) {
+            if (t.mk >= 0) {
+                const old = this.tileMeshes[t.mk];
+                old.setMatrixAt(t.i, HIDDEN);
+                old.instanceMatrix.needsUpdate = true;
+                old.boundingSphere = null;
+            }
+            t.mk = k;
+            this.tileMeshes[k].boundingSphere = null;
+        }
+        tmpM.makeScale(1, Math.max(0.001, t.rh), 1);
+        tmpM.setPosition(t.x, 0, t.z);
+        const im = this.tileMeshes[k];
+        im.setMatrixAt(t.i, tmpM);
+        im.instanceMatrix.needsUpdate = true;
+    }
+
     materialFor(t) {
         if (t.biome !== B.WATER) return this.materials[t.biome];
 
@@ -248,17 +332,27 @@ export class World {
         return this.seabedMats[h < 0.1 ? 0 : h < 0.2 ? 1 : 2];
     }
 
+    // One instanced mesh per tile material: the whole island takes about ten draw calls.
+    // Each tile has a slot in every mesh and is shown in the one that fits its ground.
+    matKey(t) {
+        if (t.biome !== B.WATER) return t.biome;
+        const h = t.height;
+        return BIOMES.length + (h < 0.1 ? 0 : h < 0.2 ? 1 : 2);
+    }
+
     buildMeshes() {
-        for (const t of this.tiles) {
-            const mesh = new THREE.Mesh(tileGeo, this.materialFor(t));
-            mesh.position.set(t.x, 0, t.z);
-            mesh.scale.y = t.rh;
-            mesh.castShadow = t.biome !== B.WATER;
-            mesh.receiveShadow = true;
-            mesh.userData.tile = t;
-            this.group.add(mesh);
-            this.meshes[t.i] = mesh;
-        }
+        const n = this.tiles.length;
+        const mats = [...this.materials, ...this.seabedMats];
+        this.tileMeshes = mats.map((m, k) => {
+            if (k === B.WATER) return null;
+            const im = new SlotMesh(tileGeo, m, n);
+            im.castShadow = k < BIOMES.length && k !== B.LAVA;
+            im.receiveShadow = true;
+            this.group.add(im);
+            return im;
+        });
+        this.pickMeshes = this.tileMeshes.filter(Boolean);
+        for (const t of this.tiles) { t.mk = -1; this.placeTile(t); }
 
         // The sea around the island shares the water material, so lakes and sea read as one.
         const sea = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), this.materials[B.WATER]);
@@ -293,11 +387,9 @@ export class World {
         const bushMat = new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true });
 
         const make = (geo, mat) => {
-            const im = new THREE.InstancedMesh(geo, mat, n);
+            const im = new SlotMesh(geo, mat, n);
             im.castShadow = true;
             im.receiveShadow = true;
-            im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            for (let i = 0; i < n; i++) im.setMatrixAt(i, HIDDEN);
             this.group.add(im);
             return im;
         };
@@ -340,6 +432,8 @@ export class World {
         const damGeo = new THREE.BoxGeometry(1, 1, 1);
         damGeo.translate(0, 0.5, 0);
         this.dams = make(damGeo, new THREE.MeshStandardMaterial({ color: 0x7a5a36, roughness: 1, flatShading: true }));
+        // Small things do not need their own shadow.
+        for (const im of [this.fruits, this.nutMesh, this.shrooms, this.dams]) im.castShadow = false;
 
         for (const t of this.tiles) this.updateDecor(t);
         this.updatePlants();
@@ -681,9 +775,7 @@ export class World {
         this.islandCache = null;
         t.food = Math.min(t.food, this.capFor(t) * (this.living ? 0.6 : 0.3));
         if (this.bloom) this.bloom[t.i] = 0;
-        const mesh = this.meshes[t.i];
-        mesh.material = this.materialFor(t);
-        mesh.castShadow = t.biome !== B.WATER && t.biome !== B.LAVA;
+        this.placeTile(t);
         if (t.biome !== B.LAVA) t.lava = 0;
         this.animating.add(t);
         this.updateDecor(t);
@@ -785,7 +877,7 @@ export class World {
             if (Math.abs(h - t.height) > 0.01) {
                 t.height = h;
                 this.animating.add(t);
-                if (t.biome === B.WATER) this.meshes[t.i].material = this.materialFor(t);
+                if (t.biome === B.WATER) this.placeTile(t);
             }
         }
         return changed;
@@ -867,7 +959,7 @@ export class World {
             } else {
                 t.rh += diff * Math.min(1, dt * 7);
             }
-            this.meshes[t.i].scale.y = t.rh;
+            this.placeTile(t);
             this.updateDecor(t);
         }
     }

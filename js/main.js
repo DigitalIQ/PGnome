@@ -18,10 +18,16 @@ try {
     document.body.innerHTML = '<p style="padding:24px">PGNome needs WebGL. Please try a current browser.</p>';
     throw e;
 }
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Plain PCF is much cheaper than the soft variant. Shadows are redrawn every other frame.
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.shadowMap.autoUpdate = false;
+
+// Battery saver: 30 frames, no shadows, normal resolution. Remembered per browser.
+const PREFS_KEY = 'pgnome-prefs-v1';
+let eco = false;
+try { eco = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}').eco === true; } catch (e) { /* storage blocked */ }
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -54,6 +60,23 @@ sun.shadow.bias = -0.0006;
 sun.shadow.normalBias = 0.02;
 scene.add(sun);
 scene.add(sun.target);
+
+function applyQuality() {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, eco ? 1 : 1.5));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    sun.castShadow = !eco;
+    renderer.shadowMap.needsUpdate = true;
+}
+applyQuality();
+const ecoBox = document.getElementById('eco');
+if (ecoBox) {
+    ecoBox.checked = eco;
+    ecoBox.addEventListener('change', () => {
+        eco = ecoBox.checked;
+        try { localStorage.setItem(PREFS_KEY, JSON.stringify({ eco })); } catch (e) { /* storage blocked */ }
+        applyQuality();
+    });
+}
 
 const game = new Game(scene);
 const sky = new Sky(scene);
@@ -249,9 +272,13 @@ else game.newWorld(randomSeed());
 frameCamera();
 ui.showStart(!!saved);
 
-let acc = 0, last = performance.now(), uiTimer = 0, plantTimer = 0, saveTimer = 0;
+let acc = 0, last = performance.now(), uiTimer = 0, plantTimer = 0, saveTimer = 0, frameNo = 0;
 function frame(now) {
     requestAnimationFrame(frame);
+    // Fast screens fire up to 120 times a second. 60 frames are plenty, 30 when the
+    // game waits, the window is in the background or the battery saver is on.
+    const idle = eco || game.paused || state.overlay || !document.hasFocus();
+    if (now - last < 1000 / (idle ? 30 : 60) - 2) return;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (game.world && !game.paused && !state.overlay) {
@@ -267,7 +294,7 @@ function frame(now) {
     game.animate(dt);
     plantTimer -= dt;
     if (plantTimer <= 0 && game.world) {
-        plantTimer = 0.25;
+        plantTimer = 0.5;
         game.world.updatePlants();
     }
     applyEnvironment(dt);
@@ -284,6 +311,7 @@ function frame(now) {
         camera.position.x += sx;
         camera.position.z += sz;
     }
+    if (sun.castShadow && frameNo++ % 2 === 0) renderer.shadowMap.needsUpdate = true;
     renderer.render(scene, camera);
     camera.position.x -= sx;
     camera.position.z -= sz;
@@ -301,4 +329,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Handy for debugging in the console.
-window.pgnome = { game, actions, camera, controls, sky };
+window.pgnome = { game, actions, camera, controls, sky, renderer, scene };

@@ -24,6 +24,7 @@ PGNome is a small evolution sandbox in the browser. A handful of creatures, the 
 - **Your tools.** Inspect, carry Nomes, scatter food and paint terrain: meadow, forest, water, sand, marsh and rock. Water blocks paths, rock raises the ground and is cold.
 - **Read-outs.** Population graph with season bands (plus land area on living islands), gene pool ranges, body plan shares, island size and height, a log, and fourteen goals.
 - **Statistics.** A statistics window with nine tabs: overview and a year table, population, land and predators over time, the spread and drift of every gene, body plans, food and the poison race, predators and how their genes evolve, disasters, causes of death, weather and the marks Nomes leave on the land, and notable Nomes you can jump to.
+- **Light on the computer.** The island is drawn with a few instanced meshes, Nome bodies are merged per material, and the game draws at most 60 frames a second (30 in the background or while paused). A battery saver in the world settings drops to 30 frames, normal resolution and no shadows.
 - **Saves itself.** The game autosaves to the browser and offers "Continue" on the next visit.
 
 ## Controls

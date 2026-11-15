@@ -23,7 +23,8 @@ const GEO = {
 const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 });
 const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
 const hornMat = new THREE.MeshStandardMaterial({ color: 0xefe3c4, roughness: 0.6 });
-const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+// The hit shape is only for mouse picking. An invisible material is never drawn but can still be hit.
+const hitMat = new THREE.MeshBasicMaterial({ visible: false });
 const footGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
 const clawMat = new THREE.MeshStandardMaterial({ color: 0x2b2420, roughness: 0.5 });
 const stalkGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 5);
@@ -314,6 +315,12 @@ export function buildBody(g, seed) {
     tail.add(tip);
     pivot.add(tail);
 
+    // Static parts become one mesh per material, so a Nome costs a handful of draw calls.
+    mergeStatic(pivot, [body, tail, antennae], owned);
+    for (const l of legs) mergeStatic(l.hip, [], owned);
+    if (antennae) mergeStatic(antennae, [], owned);
+    mergeStatic(tail, [], owned);
+
     const hit = new THREE.Mesh(GEO.hit, hitMat);
     hit.position.y = 0.35;
     hit.scale.set(1, 1, Math.max(1, g.bodyLen * 0.9));
@@ -330,4 +337,43 @@ export function buildBody(g, seed) {
             accentMat.dispose();
         }
     };
+}
+
+const tmpMat = new THREE.Matrix4();
+
+// Merges the meshes under a group (except the ones in keep) into one mesh per material.
+// Only the torso casts a shadow, small parts would cost a shadow draw each.
+function mergeStatic(group, keep, owned) {
+    const buckets = new Map();
+    const remove = [];
+    for (const ch of group.children) {
+        if (keep.includes(ch)) continue;
+        let found = false;
+        ch.traverse(o => {
+            if (!o.isMesh) return;
+            found = true;
+            o.updateMatrix();
+            tmpMat.copy(o.matrix);
+            for (let p = o.parent; p && p !== group; p = p.parent) {
+                p.updateMatrix();
+                tmpMat.premultiply(p.matrix);
+            }
+            const geo = o.geometry.clone().applyMatrix4(tmpMat);
+            if (!buckets.has(o.material)) buckets.set(o.material, []);
+            buckets.get(o.material).push(geo);
+        });
+        if (found) remove.push(ch);
+    }
+    for (const ch of remove) group.remove(ch);
+    for (const [mat, list] of buckets) {
+        const merged = list.length === 1 ? list[0] : mergeGeometries(list);
+        if (!merged) {
+            // Parts that do not fit together stay separate.
+            for (const gm of list) { owned.push(gm); group.add(new THREE.Mesh(gm, mat)); }
+            continue;
+        }
+        if (list.length > 1) list.forEach(gm => gm.dispose());
+        owned.push(merged);
+        group.add(new THREE.Mesh(merged, mat));
+    }
 }
