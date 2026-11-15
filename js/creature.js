@@ -1,30 +1,48 @@
 import * as THREE from 'three';
-import { GENES, BIOMES, MATURITY_AGE, MAX_POP } from './config.js';
+import { GENES, BIOMES, B, MATURITY_AGE, MAX_POP, legCount } from './config.js';
 import { rand, clamp, lerp, gauss, randomName } from './rng.js';
-import { isWalkable } from './world.js';
+import { isWalkable, WATER_H } from './world.js';
 import { emoteMaterials } from './icons.js';
+import { buildBody, baseColor } from './body.js';
 
-const legGeo = new THREE.CylinderGeometry(0.05, 0.045, 1, 6);
-legGeo.translate(0, -0.5, 0);
-const geo = {
-    body: new THREE.SphereGeometry(0.32, 20, 14),
-    eye: new THREE.SphereGeometry(1, 12, 8),
-    ear: new THREE.ConeGeometry(1, 1, 6),
-    tail: new THREE.SphereGeometry(1, 8, 6),
-    leg: legGeo,
-    hit: new THREE.SphereGeometry(0.6, 8, 6)
-};
-const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25 });
-const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
-const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+// Fallbacks for genes that older saves do not have yet.
+const BODY_DEFAULTS = { legs: 0.5, bodyLen: 1, plump: 0.5, eyes: 0.5, horns: 0.25, tail: 0.5, pattern: 0.2 };
 
 let nextId = 1;
 export const setNextId = n => { nextId = Math.max(nextId, n); };
 export const getNextId = () => nextId;
 
-export function randomGenes(climate) {
+// A species template per island keeps the founders related, so later change is visible.
+export function speciesTemplate(rnd) {
+    const r = (a, b) => a + rnd() * (b - a);
+    return {
+        hue: r(0, 360), hue2: r(0, 360), legs: r(0.32, 0.7), bodyLen: r(0.85, 1.25), plump: r(0.2, 0.8),
+        eyes: r(0.2, 0.8), horns: r(0, 0.6), tail: r(0.1, 0.9), pattern: r(0, 1)
+    };
+}
+
+export function fillGenes(g, template) {
+    for (const [k, def] of Object.entries(GENES)) {
+        if (typeof g[k] === 'number' && !Number.isNaN(g[k])) continue;
+        if (k === 'hue2') g[k] = ((g.hue ?? 0) + 140) % 360;
+        else if (template && k in template) g[k] = template[k];
+        else if (k in BODY_DEFAULTS) g[k] = BODY_DEFAULTS[k];
+        else g[k] = (def.min + def.max) / 2;
+    }
+    return g;
+}
+
+export function randomGenes(climate, template) {
     const g = {};
     for (const [k, def] of Object.entries(GENES)) g[k] = rand(def.min, def.max);
+    if (template) {
+        for (const [k, v] of Object.entries(template)) {
+            const def = GENES[k];
+            const spread = (def.max - def.min) * (def.wrap ? 0.05 : 0.09);
+            const x = v + gauss() * spread;
+            g[k] = def.wrap ? ((x % 360) + 360) % 360 : clamp(x, def.min, def.max);
+        }
+    }
     g.size = rand(0.85, 1.15);
     g.speed = rand(1.0, 1.5);
     g.sight = rand(4.5, 7);
@@ -50,6 +68,12 @@ export function mixGenes(a, b, rate) {
         v += gauss() * (def.max - def.min) * 0.06 * rate;
         g[k] = def.wrap ? ((v % 360) + 360) % 360 : clamp(v, def.min, def.max);
     }
+    // Rarely a body gene jumps to a new value. This is how new body plans appear.
+    if (Math.random() < 0.05 * rate) {
+        const keys = Object.keys(GENES).filter(k => GENES[k].body);
+        const k = keys[Math.floor(Math.random() * keys.length)];
+        g[k] = rand(GENES[k].min, GENES[k].max);
+    }
     return g;
 }
 
@@ -62,7 +86,7 @@ export class Creature {
         this.x = x;
         this.z = z;
         this.y = opts.y ?? 0;
-        this.genes = genes;
+        this.genes = fillGenes(genes, game.template);
         this.generation = opts.generation || 1;
         this.parents = opts.parents || null;
         this.age = opts.age ?? 0;
@@ -112,76 +136,22 @@ export class Creature {
     }
 
     get color() {
-        const cold = this.genes.prefTemp < 35;
-        return new THREE.Color().setHSL(this.genes.hue / 360, cold ? 0.32 : 0.55, cold ? 0.7 : 0.56);
+        return baseColor(this.genes);
     }
 
     buildMesh() {
-        const g = this.genes;
-        this.material = new THREE.MeshStandardMaterial({ color: this.color, roughness: g.prefTemp < 35 ? 1 : 0.55 });
-        const root = new THREE.Group();
+        const parts = buildBody(this.genes, this.id * 7919 + 13);
+        this.parts = parts;
+        this.material = parts.limbMat;
+        this.legs = parts.legs;
+        this.legLen = parts.legLen;
+        this.pivot = parts.pivot;
+        this.body = parts.body;
+        this.tail = parts.tail;
+        this.hit = parts.hit;
+        const root = parts.root;
         root.userData.creature = this;
-
-        this.legLen = 0.06 + g.speed * 0.07;
-        this.legs = [];
-        for (const side of [-1, 1]) {
-            const hip = new THREE.Group();
-            hip.position.set(side * 0.12, this.legLen + 0.06, 0.02);
-            const leg = new THREE.Mesh(geo.leg, this.material);
-            leg.scale.y = this.legLen + 0.06;
-            leg.castShadow = true;
-            hip.add(leg);
-            root.add(hip);
-            this.legs.push(hip);
-        }
-
-        const pivot = new THREE.Group();
-        pivot.position.y = this.legLen;
-        root.add(pivot);
-        this.pivot = pivot;
-
-        const body = new THREE.Mesh(geo.body, this.material);
-        body.position.y = 0.3;
-        body.scale.set(1, 0.92, 1.05);
-        body.castShadow = true;
-        pivot.add(body);
-        this.body = body;
-
-        const eyeSize = 0.05 + ((g.sight - 3) / 7) * 0.045;
-        for (const side of [-1, 1]) {
-            const eye = new THREE.Mesh(geo.eye, eyeMat);
-            eye.scale.setScalar(eyeSize);
-            eye.position.set(side * 0.12, 0.38, 0.26);
-            const pupil = new THREE.Mesh(geo.eye, pupilMat);
-            pupil.scale.setScalar(0.55);
-            pupil.position.set(0, 0, 0.6);
-            eye.add(pupil);
-            pivot.add(eye);
-        }
-
-        // Heat lovers grow big ears, cold lovers small round ones.
-        const heat = g.prefTemp / 100;
-        const earLen = 0.07 + heat * 0.28;
-        const earW = 0.05 + heat * 0.04;
-        for (const side of [-1, 1]) {
-            const ear = new THREE.Mesh(geo.ear, this.material);
-            ear.scale.set(earW, earLen, earW * 0.6);
-            ear.position.set(side * 0.16, 0.55 + earLen * 0.4, -0.02);
-            ear.rotation.z = -side * 0.4;
-            ear.castShadow = true;
-            pivot.add(ear);
-        }
-
-        const tail = new THREE.Mesh(geo.tail, this.material);
-        tail.scale.setScalar(0.07 + g.sociability * 0.05);
-        tail.position.set(0, 0.24, -0.32);
-        pivot.add(tail);
-
-        const hit = new THREE.Mesh(geo.hit, hitMat);
-        hit.position.y = 0.35;
-        hit.userData.creature = this;
-        root.add(hit);
-        this.hit = hit;
+        this.hit.userData.creature = this;
 
         this.emote = new THREE.Sprite(emoteMaterials().love);
         this.emote.scale.set(0.42, 0.42, 1);
@@ -204,7 +174,7 @@ export class Creature {
 
         const tile = world.tileAt(this.x, this.z);
         if (!tile) { game.kill(this, 'got lost'); return; }
-        const climate = world.climate(tile, game.seasonTemp);
+        const climate = game.climate(tile);
         const dT = climate.temp - g.prefTemp;
         // Big bodies keep warm (Bergmann's rule), small ones shed heat.
         const tdiff = dT < 0 ? -dT / g.size : dT * (0.55 + 0.45 * g.size);
@@ -213,7 +183,9 @@ export class Creature {
         this.coldSide = dT < 0;
         const inWater = !isWalkable(tile);
 
-        let burn = 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015 + d * 1.1;
+        const extraLegs = (legCount(g.legs) - 2) / 2;
+        let burn = 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015 + d * 1.1
+            + extraLegs * 0.05 + game.weatherBurn * (this.sheltered(tile) ? 0.4 : 1);
         if (this.moving) burn += 0.2 * g.speed * g.speed;
         if (!this.adult) burn *= 0.7;
         this.energy -= burn * dt;
@@ -278,7 +250,7 @@ export class Creature {
             if (o === this) continue;
             const dd = Math.hypot(o.x - this.x, o.z - this.z);
             if (dd < 5) near++;
-            if (dd > 1.2 && dd < friendD && dd < g.sight + 2) { friendD = dd; friend = o; }
+            if (dd > 1.2 && dd < friendD && dd < g.sight * game.sightMul + 2) { friendD = dd; friend = o; }
         }
         this.lonely = g.sociability > 0.6 && near === 0;
         this.crowded = g.sociability < 0.3 && near > 4;
@@ -303,7 +275,7 @@ export class Creature {
         }
 
         if (hungry || (this.energy < 85 && start.food > 0.35)) {
-            const visited = world.bfs(start, Math.ceil(g.sight));
+            const visited = world.bfs(start, Math.ceil(g.sight * game.sightMul));
             let best = null, bestScore = -Infinity, far = null;
             for (const i of visited) {
                 const t = world.tiles[i];
@@ -338,7 +310,7 @@ export class Creature {
         for (let k = 0; k < 7; k++) {
             const i = visited[Math.floor(Math.random() * visited.length)];
             const t = world.tiles[i];
-            const c = world.climate(t, game.seasonTemp);
+            const c = game.climate(t);
             const dT = Math.abs(c.temp - g.prefTemp);
             let score = -dT / 25 - Math.abs(c.moisture - g.prefMoisture) / 80 + Math.random() * 0.3 + Math.min(t.food, 1) * 0.2;
             if (friend) {
@@ -390,7 +362,12 @@ export class Creature {
         const dx = tx - this.x, dz = tz - this.z;
         const dist = Math.hypot(dx, dz);
         const here = this.game.world.tileAt(this.x, this.z);
-        const terrain = here && isWalkable(here) ? BIOMES[here.biome].speed : 0.45;
+        // More legs handle rough ground better but are a little slower on the flat.
+        const legs = legCount(this.genes.legs);
+        const grip = legs === 2 ? 0 : legs === 4 ? 0.3 : 0.55;
+        const flat = legs === 2 ? 1.06 : legs === 4 ? 1 : 0.92;
+        const base = here && isWalkable(here) ? BIOMES[here.biome].speed : 0.45;
+        const terrain = (base + (1 - base) * grip) * flat * this.game.windSlow;
         const sp = this.genes.speed * terrain * (this.adult ? 1 : 0.75) * dt;
         if (dist <= sp) { this.x = tx; this.z = tz; }
         else { this.x += dx / dist * sp; this.z += dz / dist * sp; }
@@ -467,6 +444,11 @@ export class Creature {
         }
     }
 
+    // Forests shelter from storms.
+    sheltered(tile) {
+        return !!tile && tile.biome === B.FOREST;
+    }
+
     cancelPlans() {
         if (this.partner) this.stopCourting();
         this.path = [];
@@ -480,7 +462,7 @@ export class Creature {
     render(dt, time) {
         const world = this.game.world;
         const tile = world.tileAt(this.x, this.z);
-        let ground = tile ? (isWalkable(tile) ? tile.rh : tile.rh - 0.18) : 0;
+        let ground = tile ? (isWalkable(tile) ? tile.rh : WATER_H - 0.18) : 0;
         if (this.dragged) ground = Math.max(ground, 1) + 1.2;
         this.y = lerp(this.y, ground, Math.min(1, dt * (this.dragged ? 18 : 12)));
         this.root.position.set(this.x, this.y, this.z);
@@ -507,22 +489,22 @@ export class Creature {
         if (this.moving && !this.dragged) {
             this.walkPhase += dt * anim * (6 + this.genes.speed * 5);
             const s = Math.sin(this.walkPhase);
-            this.legs[0].rotation.x = s * 0.7;
-            this.legs[1].rotation.x = -s * 0.7;
+            for (const l of this.legs) l.hip.rotation.x = Math.sin(this.walkPhase + l.phase) * 0.7;
             this.pivot.position.y = this.legLen + Math.abs(s) * 0.06;
             this.pivot.rotation.x = 0.08;
         } else {
-            this.legs[0].rotation.x *= 0.8;
-            this.legs[1].rotation.x *= 0.8;
+            for (const l of this.legs) l.hip.rotation.x *= 0.8;
             this.pivot.position.y = this.legLen;
             this.pivot.rotation.x = this.action === 'eat' ? 0.3 + Math.sin(time * 12) * 0.12 : 0;
         }
         const squash = this.action === 'rest' ? 0.86 : 1 + Math.sin(time * 2 + this.id) * 0.015;
-        this.body.scale.set(1 / Math.sqrt(squash), 0.92 * squash, 1.05 / Math.sqrt(squash));
+        this.body.scale.set(1 / Math.sqrt(squash), 0.92 * squash, 1 / Math.sqrt(squash));
         if (this.dragged) {
-            this.legs[0].rotation.x = Math.sin(time * 14) * 0.9;
-            this.legs[1].rotation.x = -Math.sin(time * 14) * 0.9;
+            for (const l of this.legs) l.hip.rotation.x = Math.sin(time * 14 + l.phase) * 0.9;
         }
+        // Happy Nomes wag their tail.
+        const wag = this.mood > 60 ? 0.45 : 0.12;
+        this.tail.rotation.y = Math.sin(time * (this.mood > 60 ? 9 : 3) + this.id) * wag * anim;
 
         const mats = emoteMaterials();
         let emote = null;
@@ -541,7 +523,7 @@ export class Creature {
 
     dispose() {
         this.game.scene.remove(this.root);
-        this.material.dispose();
+        this.parts.dispose();
     }
 
     serialize() {

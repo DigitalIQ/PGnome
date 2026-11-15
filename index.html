@@ -66,6 +66,13 @@
                     <span id="year">Year 1</span>
                 </div>
             </div>
+            <div class="weather" title="Weather">
+                <svg viewBox="0 0 24 24" id="weather-icon"></svg>
+                <div>
+                    <strong id="weather-name">Clear</strong>
+                    <span id="weather-hint">Normal growth</span>
+                </div>
+            </div>
             <div class="speed" role="group" aria-label="Simulation speed">
                 <button data-speed="0" title="Pause (Space)">
                     <svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>
@@ -74,6 +81,9 @@
                 <button data-speed="3" title="Fast">3x</button>
                 <button data-speed="8" title="Very fast">8x</button>
             </div>
+            <button id="btn-records" class="icon-btn" title="Island records">
+                <svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0V4zM8 6H5v1a3 3 0 0 0 3 3M16 6h3v1a3 3 0 0 1-3 3M12 13v4M8 20h8M10 17h4"/></svg>
+            </button>
             <button id="btn-panel" class="panel-toggle" title="Population and goals">
                 <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
             </button>
@@ -93,6 +103,7 @@
                     <div><b id="stat-births">0</b><span>born</span></div>
                     <div><b id="stat-deaths">0</b><span>died</span></div>
                 </div>
+                <div class="island-row" id="island-row"></div>
                 <canvas id="chart" width="560" height="120" aria-label="Population over time"></canvas>
                 <details open>
                     <summary>Gene pool</summary>
@@ -133,13 +144,39 @@
             <ul class="how">
                 <li><b>Nomes</b> eat plants, look for a partner and try to stay comfortable.</li>
                 <li><b>Seasons</b> change the temperature. Winter is lean. Big Nomes keep warm, big ears help in heat.</li>
+                <li><b>Weather</b> brings rain, storms, fog, heat waves and snow. Bodies change too: legs, horns, patterns.</li>
                 <li><b>You</b> shape the land, carry Nomes and drop food. You never control them directly.</li>
             </ul>
+            <div class="modes" role="radiogroup" aria-label="Island type">
+                <button class="mode active" data-mode="classic" role="radio" aria-checked="true">
+                    <b>Classic island</b><span>The land stays as you shape it.</span>
+                </button>
+                <button class="mode" data-mode="living" role="radio" aria-checked="false">
+                    <b>Living island</b><span>Coasts, mountains and forests change on their own. Score &times;1.25.</span>
+                </button>
+            </div>
             <div class="btn-row">
                 <button id="btn-continue" class="btn hidden">Continue</button>
                 <button id="btn-start" class="btn">New island</button>
             </div>
             <label class="seed">Seed <input id="seed-input" type="text" inputmode="numeric" placeholder="random"></label>
+            <div class="start-records">
+                <div class="start-records-head"><h2>Best runs</h2><button id="btn-all-records" class="link">All records</button></div>
+                <div id="start-records"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="records" class="overlay hidden">
+        <div class="card wide">
+            <button class="close" id="records-close" title="Close (Esc)">&times;</button>
+            <h1>Records</h1>
+            <div class="tabs" role="tablist">
+                <button class="tab active" data-scope="all" role="tab">All islands</button>
+                <button class="tab" data-scope="island" role="tab">This island</button>
+            </div>
+            <div id="records-list"></div>
+            <p class="hint">Score: years &times; 25, generations &times; 15, peak population &times; 2, goals &times; 40. Living islands get &times;1.25. Records stay in this browser.</p>
         </div>
     </div>
 
@@ -147,6 +184,7 @@
         <div class="card">
             <h1>Extinct</h1>
             <p class="lead" id="extinct-text"></p>
+            <div id="extinct-score" class="score-box"></div>
             <div class="btn-row">
                 <button id="btn-reseed" class="btn">Bring new Nomes</button>
                 <button id="btn-new2" class="btn ghost">New island</button>

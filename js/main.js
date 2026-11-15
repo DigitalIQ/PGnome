@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Game } from './game.js';
 import { UI } from './ui.js';
 import { setupInput } from './input.js';
+import { Sky } from './sky.js';
 import { SIM_STEP } from './config.js';
 import { randomSeed, clamp } from './rng.js';
 
@@ -53,7 +54,9 @@ scene.add(sun);
 scene.add(sun.target);
 
 const game = new Game(scene);
-const state = { tool: 'inspect', overlay: true };
+const sky = new Sky(scene);
+const state = { tool: 'inspect', overlay: true, mode: 'classic' };
+let snowCover = 0;
 
 const summerSun = new THREE.Color(0xffe6bf), winterSun = new THREE.Color(0xdde7ff);
 const summerSky = new THREE.Color(0xe4eef5), winterSky = new THREE.Color(0xc9d6e6);
@@ -69,17 +72,26 @@ function frameCamera() {
     controls.update();
 }
 
-function applyEnvironment() {
+function applyEnvironment(dt) {
     if (!game.world) return;
-    const t = game.seasonTemp;
-    const snow = clamp((-t - 9) / 12, 0, 1) * 0.72;
+    const w = game.weather.now;
+    const t = game.airTemp;
+    // Snow cover builds up while it snows and melts slowly.
+    let target = clamp((-t - 9) / 12, 0, 1) * 0.72;
+    if (t < 2) target = Math.max(target, (w.snow || 0) * 0.6);
+    snowCover += (target - snowCover) * Math.min(1, dt * 0.35);
     const ice = clamp((-t - 14) / 10, 0, 1) * 0.35;
-    game.world.applySeason(snow, ice);
-    scene.background.copy(game.world.materials[0].color);
-    const warm = clamp((t + 24) / 42, 0, 1);
+    game.world.applySeason(snowCover, ice);
+    const warm = clamp((game.seasonTemp + 24) / 42, 0, 1);
+    game.flash = Math.max(0, (game.flash || 0) - dt * 3.5);
+    const flash = game.flash > 0.5 || (game.flash > 0.2 && game.flash < 0.35) ? game.flash : 0;
     sun.color.copy(winterSun).lerp(summerSun, warm);
-    sun.intensity = 1.9 + warm * 0.6;
+    sun.intensity = (1.9 + warm * 0.6) * w.light + flash * 2;
     hemi.color.copy(winterSky).lerp(summerSky, warm);
+    hemi.intensity = 1.2 * (0.55 + 0.45 * w.light) + flash * 3;
+    scene.background.copy(game.world.materials[0].color).multiplyScalar(0.55 + 0.45 * Math.min(1, w.light));
+    sky.applyFog(scene, w.fog, scene.background);
+    if (w.fog > 0.3) scene.background.lerp(sky.fogColor, Math.min(1, (w.fog - 0.3) * 1.1));
 }
 
 function parseSeed(text) {
@@ -118,9 +130,24 @@ const actions = {
         state.overlay = true;
         ui.showStart(!!Game.loadSaved());
     },
+    setMode(mode) {
+        state.mode = mode;
+        ui.setMode(mode);
+    },
     newWorld(seedText) {
-        game.newWorld(parseSeed(seedText));
+        game.newWorld(parseSeed(seedText), state.mode);
+        snowCover = 0;
         start();
+    },
+    showRecords() {
+        if (!state.overlay) game.record(false);
+        state.recordsFrom = state.overlay;
+        state.overlay = true;
+        ui.showRecords();
+    },
+    closeRecords() {
+        ui.hideRecords();
+        state.overlay = !!state.recordsFrom;
     },
     continueSaved() {
         const data = Game.loadSaved();
@@ -131,6 +158,7 @@ const actions = {
     reseed() {
         game.extinct = false;
         game.spawnFounders(8);
+        game.startRun();
         game.log('Eight wild Nomes wash ashore.', 'world');
         start(false);
     },
@@ -155,6 +183,7 @@ function start(reframe = true) {
 }
 
 const ui = new UI(game, actions);
+ui.setMode(state.mode);
 const input = setupInput({ renderer, camera, controls, scene, game, actions, state });
 ui.setTool(state.tool);
 
@@ -169,7 +198,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) game.
 
 // A world is generated behind the start screen so the island is visible right away.
 const saved = Game.loadSaved();
-if (saved) game.load(saved);
+if (saved) { game.load(saved); actions.setMode(game.mode); }
 else game.newWorld(randomSeed());
 frameCamera();
 ui.showStart(!!saved);
@@ -195,7 +224,8 @@ function frame(now) {
         plantTimer = 0.25;
         game.world.updatePlants();
     }
-    applyEnvironment();
+    applyEnvironment(dt);
+    sky.update(dt, game.weather.now, controls.target, game.world && !game.paused && !state.overlay);
     input.update(dt);
     controls.update();
     renderer.render(scene, camera);
@@ -213,4 +243,4 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Handy for debugging in the console.
-window.pgnome = { game, actions, camera, controls };
+window.pgnome = { game, actions, camera, controls, sky };

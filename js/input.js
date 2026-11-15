@@ -192,7 +192,7 @@ export function setupInput({ renderer, camera, controls, scene, game, actions, s
 
             if (sel && sel.tile) {
                 selBox.visible = true;
-                selBox.position.set(sel.tile.x, sel.tile.rh + 0.02, sel.tile.z);
+                selBox.position.set(sel.tile.x, Math.max(sel.tile.rh, WATER_H) + 0.02, sel.tile.z);
             } else {
                 selBox.visible = false;
             }
@@ -200,7 +200,7 @@ export function setupInput({ renderer, camera, controls, scene, game, actions, s
             const showHover = hoverTile && !dragging && state.tool !== 'move' && !state.overlay;
             hover.visible = !!showHover;
             if (showHover) {
-                hover.position.set(hoverTile.x, hoverTile.rh + 0.02, hoverTile.z);
+                hover.position.set(hoverTile.x, Math.max(hoverTile.rh, WATER_H) + 0.02, hoverTile.z);
                 const color = state.tool.startsWith('paint') ? 0xf0b04a : state.tool === 'feed' ? 0x9bd36e : 0xffffff;
                 hover.material.color.setHex(color);
                 hover.scale.setScalar(state.tool === 'feed' ? 3 : 1);

@@ -1,8 +1,11 @@
 import * as THREE from 'three';
-import { MAP_SIZE, BIOMES, B } from './config.js';
+import { MAP_SIZE, BIOMES, B, YEAR_LENGTH } from './config.js';
 import { makeNoise, mulberry32, clamp } from './rng.js';
 
 export const WATER_H = 0.3;
+export const SEA = 0.36;
+const SEABED = [0x2f5f80, 0x5d9aa0, 0xd3c08c];
+const TAU = Math.PI * 2;
 const tileGeo = new THREE.BoxGeometry(1, 1, 1);
 tileGeo.translate(0, 0.5, 0);
 
@@ -22,9 +25,12 @@ export function isWalkable(t) {
 }
 
 export class World {
-    constructor(scene, seed, saved = null) {
+    constructor(scene, seed, saved = null, mode = 'classic') {
         this.scene = scene;
         this.seed = seed;
+        this.living = mode === 'living';
+        this.seaNow = SEA;
+        this.evolveAcc = 0;
         this.size = saved ? Math.round(Math.sqrt(saved.length)) : MAP_SIZE;
         this.tiles = [];
         this.meshes = [];
@@ -40,6 +46,12 @@ export class World {
             roughness: i === B.WATER ? 0.35 : 0.92,
             metalness: 0
         }));
+        // The sea is see-through, so the seabed shows how deep the water is.
+        const water = this.materials[B.WATER];
+        water.transparent = true;
+        water.opacity = 0.62;
+        water.depthWrite = false;
+        this.seabedMats = SEABED.map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 1 }));
 
         if (saved) this.restore(saved);
         else this.generate();
@@ -68,59 +80,95 @@ export class World {
 
     get center() { return (this.size - 1) / 2; }
 
-    generate() {
+    // Raw elevation (e) and wetness (m) per tile, both 0..1. Deterministic per seed.
+    baseFields() {
         const elevation = makeNoise(this.seed);
         const wetness = makeNoise(this.seed + 7919);
-        const rand = mulberry32(this.seed + 17);
         const s = this.size, c = (s - 1) / 2;
+        const e = new Float32Array(s * s), m = new Float32Array(s * s), cap = new Float32Array(s * s);
         for (let z = 0; z < s; z++) {
             for (let x = 0; x < s; x++) {
                 const nx = x / s, nz = z / s;
                 const dx = (x - c) / c, dz = (z - c) / c;
                 const d = Math.sqrt(dx * dx + dz * dz);
-                const e = elevation(nx * 3.4, nz * 3.4, 4) * 0.95 + 0.11 - Math.pow(d, 2.6) * 0.45;
-                const m = wetness(nx * 3 + 40, nz * 3 + 40, 3);
-
-                let biome = B.MEADOW;
-                if (e < 0.36) biome = B.WATER;
-                else if (e < 0.4) biome = B.SAND;
-                else if (e > 0.7) biome = B.ROCK;
-                else if (m > 0.6 && e < 0.52) biome = B.MARSH;
-                else if (m > 0.53) biome = B.FOREST;
-                else if (m < 0.36) biome = B.SAND;
-
-                let height = WATER_H;
-                if (biome !== B.WATER) {
-                    height = 0.55 + Math.round((e - 0.36) * 12) * 0.25;
-                    if (biome === B.ROCK) height += 0.25;
-                }
-                const food = BIOMES[biome].food * (0.5 + rand() * 0.5);
-                this.tiles.push({ i: this.tiles.length, x, z, biome, height, rh: height, food, jitter: rand() });
+                const i = z * s + x;
+                e[i] = elevation(nx * 3.4, nz * 3.4, 4) * 0.95 + 0.11 - Math.pow(d, 2.6) * 0.45;
+                m[i] = wetness(nx * 3 + 40, nz * 3 + 40, 3);
+                // The map edge always stays sea, also when the land rises.
+                cap[i] = 1.2 - Math.max(0, d - 0.74) * 3.4;
             }
+        }
+        return { e, m, cap };
+    }
+
+    generate() {
+        const { e, m, cap } = this.baseFields();
+        this.cap = cap;
+        const rand = mulberry32(this.seed + 17);
+        const s = this.size;
+        for (let i = 0; i < s * s; i++) {
+            const x = i % s, z = (i - x) / s;
+            let biome = B.MEADOW;
+            if (e[i] < 0.36) biome = B.WATER;
+            else if (e[i] < 0.4) biome = B.SAND;
+            else if (e[i] > 0.7) biome = B.ROCK;
+            else if (m[i] > 0.6 && e[i] < 0.52) biome = B.MARSH;
+            else if (m[i] > 0.53) biome = B.FOREST;
+            else if (m[i] < 0.36) biome = B.SAND;
+            const t = {
+                i, x, z, biome, height: 0, rh: 0, food: 0, jitter: rand(),
+                elev: e[i], elev0: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0
+            };
+            t.height = t.rh = this.heightFor(t, SEA);
+            t.food = BIOMES[biome].food * (0.5 + rand() * 0.5);
+            this.tiles.push(t);
         }
     }
 
     restore(saved) {
+        const { e, m, cap } = this.baseFields();
+        this.cap = cap;
         const rand = mulberry32(this.seed + 17);
-        saved.forEach(([biome, height, food], i) => {
+        saved.forEach((row, i) => {
+            const [biome, height, food] = row;
             const x = i % this.size, z = Math.floor(i / this.size);
-            this.tiles.push({ i, x, z, biome, height, rh: height, food, jitter: rand() });
+            const t = {
+                i, x, z, biome, height, rh: height, food, jitter: rand(),
+                elev: row[3] ?? e[i], wet: row[4] ?? m[i], veg: row[5] ?? clamp((m[i] - 0.3) * 2.4, 0, 1),
+                elev0: row[6] ?? e[i], wet0: row[7] ?? m[i], pend: -1, pendN: 0
+            };
+            if (biome === B.WATER && height >= WATER_H) t.height = t.rh = this.heightFor(t, SEA);
+            this.tiles.push(t);
         });
     }
 
     serialize() {
-        return this.tiles.map(t => [t.biome, Math.round(t.height * 100) / 100, Math.round(t.food * 100) / 100]);
+        const r = v => Math.round(v * 1000) / 1000;
+        return this.tiles.map(t => [t.biome, r(t.height), r(t.food), r(t.elev), r(t.wet), r(t.veg), r(t.elev0), r(t.wet0)]);
+    }
+
+    // Land steps up with elevation. Water tiles are seabed, lower where the sea is deeper.
+    heightFor(t, sea) {
+        const rel = t.elev - sea;
+        if (t.biome === B.WATER) return clamp(WATER_H + rel * 2.6, 0.02, WATER_H - 0.06);
+        let h = 0.55 + Math.max(0, Math.round(rel * 12)) * 0.25;
+        if (t.biome === B.ROCK) h += 0.25;
+        return Math.min(h, 4.3);
+    }
+
+    materialFor(t) {
+        if (t.biome !== B.WATER) return this.materials[t.biome];
+        const h = t.height;
+        return this.seabedMats[h < 0.1 ? 0 : h < 0.2 ? 1 : 2];
     }
 
     buildMeshes() {
         for (const t of this.tiles) {
-            const mesh = new THREE.Mesh(tileGeo, this.materials[t.biome]);
+            const mesh = new THREE.Mesh(tileGeo, this.materialFor(t));
             mesh.position.set(t.x, 0, t.z);
             mesh.scale.y = t.rh;
             mesh.castShadow = t.biome !== B.WATER;
             mesh.receiveShadow = true;
-            // Water tiles stay invisible: the sea plane draws them, but they still catch clicks.
-            mesh.visible = t.biome !== B.WATER;
             mesh.userData.tile = t;
             this.group.add(mesh);
             this.meshes[t.i] = mesh;
@@ -131,8 +179,14 @@ export class World {
         sea.rotation.x = -Math.PI / 2;
         sea.position.set(this.center, WATER_H, this.center);
         sea.receiveShadow = false;
+        sea.renderOrder = 2;
         this.group.add(sea);
         this.sea = sea;
+        // Deep floor beyond the map, so the edge of the seabed does not show.
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), this.seabedMats[0]);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(this.center, 0.01, this.center);
+        this.group.add(floor);
     }
 
     buildDecor() {
@@ -239,27 +293,172 @@ export class World {
         }
     }
 
-    climate(t, seasonTemp) {
+    climate(t, airTemp, wetShift = 0) {
         const b = BIOMES[t.biome];
-        return { temp: b.temp - (t.height - 0.8) * 8 + seasonTemp, moisture: b.moisture };
+        const h = t.biome === B.WATER ? 0.8 : t.height;
+        return { temp: b.temp - (h - 0.8) * 8 + airTemp, moisture: clamp(b.moisture + wetShift, 0, 100) };
     }
 
     setBiome(t, biome) {
         if (!t || t.biome === biome) return false;
         const prev = t.biome;
-        t.biome = biome;
-        if (biome === B.WATER) t.height = WATER_H;
-        else if (prev === B.WATER) t.height = 0.8;
-        if (biome === B.ROCK) t.height = Math.min(t.height + 0.5, 3.3);
-        else if (prev === B.ROCK) t.height = Math.max(0.8, t.height - 0.5);
-        t.food = Math.min(t.food, BIOMES[biome].food * 0.3);
+        if (this.living) {
+            this.shapeFor(t, biome);
+            t.biome = biome;
+            t.height = this.heightFor(t, this.seaNow);
+        } else {
+            t.biome = biome;
+            if (biome === B.WATER) { t.elev = Math.min(t.elev, SEA - 0.05); t.height = this.heightFor(t, SEA); }
+            else if (prev === B.WATER) t.height = 0.8;
+            if (biome === B.ROCK) t.height = Math.min(t.height + 0.5, 3.3);
+            else if (prev === B.ROCK) t.height = Math.max(0.8, t.height - 0.5);
+        }
+        t.pend = -1;
+        t.pendN = 0;
+        this.applyBiome(t);
+        return true;
+    }
+
+    // In a living world, painting reshapes the ground itself, so nature keeps the change.
+    shapeFor(t, biome) {
+        const sea = this.seaNow;
+        const land = (lo, hi) => { t.elev = clamp(t.elev, sea + lo, sea + hi); };
+        if (biome === B.WATER) t.elev = Math.min(t.elev, sea - 0.04);
+        else if (biome === B.ROCK) t.elev = Math.max(t.elev, sea + 0.37);
+        else if (biome === B.SAND) { land(0.03, 0.3); t.veg = 0.08; t.wet = Math.min(t.wet, 0.3); }
+        else if (biome === B.MEADOW) { land(0.06, 0.3); t.veg = 0.42; t.wet = clamp(t.wet, 0.4, 0.55); }
+        else if (biome === B.FOREST) { land(0.06, 0.3); t.veg = 0.92; t.wet = Math.max(t.wet, 0.6); }
+        else if (biome === B.MARSH) { land(0.04, 0.12); t.veg = 0.5; t.wet = 0.82; }
+        t.elev0 = t.elev;
+        t.wet0 = t.wet;
+    }
+
+    applyBiome(t) {
+        t.food = Math.min(t.food, BIOMES[t.biome].food * (this.living ? 0.6 : 0.3));
         const mesh = this.meshes[t.i];
-        mesh.material = this.materials[biome];
-        mesh.castShadow = biome !== B.WATER;
-        if (biome !== B.WATER) mesh.visible = true;
+        mesh.material = this.materialFor(t);
+        mesh.castShadow = t.biome !== B.WATER;
         this.animating.add(t);
         this.updateDecor(t);
+    }
+
+    // ---------- Living island ----------
+
+    seaLevel(time) {
+        if (!this.living) return SEA;
+        const y = YEAR_LENGTH;
+        return SEA + 0.04 * Math.sin(TAU * time / (y * 3.3)) + 0.02 * Math.sin(TAU * time / (y * 1.15) + 1.7);
+    }
+
+    // A hot spot wanders under the island and pushes the ground up in pulses.
+    hotspot(time) {
+        const y = YEAR_LENGTH, c = this.center;
+        const k = time / (y * 4.5) + this.seed % 97;
+        return {
+            x: c + Math.sin(k * 1.7) * 6 + Math.sin(k * 0.6 + 2) * 3,
+            z: c + Math.cos(k * 1.3) * 6 + Math.sin(k * 0.9) * 3,
+            power: 0.0024 * Math.max(0, Math.sin(TAU * time / (y * 2.6) + 0.8))
+        };
+    }
+
+    classify(t, rel) {
+        if (rel < 0) return B.WATER;
+        if (rel > 0.34) return B.ROCK;
+        if (rel < 0.025) return B.SAND;
+        if (t.wet > 0.64 && rel < 0.15) return B.MARSH;
+        if (t.veg > 0.6) return B.FOREST;
+        if (t.veg < 0.17) return B.SAND;
+        return B.MEADOW;
+    }
+
+    // Returns the tiles that changed their biome.
+    evolve(dt, time, weather) {
+        if (!this.living) return null;
+        this.evolveAcc += dt;
+        if (this.evolveAcc < 0.5) return null;
+        const step = this.evolveAcc;
+        this.evolveAcc = 0;
+        const sea = this.seaLevel(time);
+        this.seaNow = sea;
+        const hot = this.hotspot(time);
+        const s = this.size, n = s * s;
+        const snap = this.snap || (this.snap = new Float32Array(n));
+        for (let i = 0; i < n; i++) snap[i] = this.tiles[i].elev;
+        const rainy = Math.max(0, weather.wet) / 25;
+        const dry = Math.max(0, -weather.wet) / 28;
+        const changed = [];
+
+        for (let i = 0; i < n; i++) {
+            const t = this.tiles[i];
+            const x = t.x, z = t.z;
+            // Uplift, pull back to the base shape, and erosion that smooths peaks.
+            const d2 = (x - hot.x) ** 2 + (z - hot.z) ** 2;
+            let e = snap[i];
+            e += hot.power * Math.exp(-d2 / 14) * step;
+            e += (t.elev0 - e) * 0.0011 * step;
+            const avg = (snap[x > 0 ? i - 1 : i] + snap[x < s - 1 ? i + 1 : i] + snap[z > 0 ? i - s : i] + snap[z < s - 1 ? i + s : i]) / 4;
+            const rel0 = e - sea;
+            e += (avg - e) * (0.0012 + rainy * 0.002 + (rel0 > 0.3 ? 0.0015 : 0)) * step;
+            t.elev = Math.min(e, this.cap[i]);
+            const rel = t.elev - sea;
+
+            // Moisture follows the weather. Vegetation follows moisture, slowly.
+            t.wet += (clamp(t.wet0 + weather.wet / 100 * 0.6, 0, 1) - t.wet) * 0.02 * step;
+            if (rel >= 0) {
+                const target = clamp((t.wet - 0.3) * 2.4, 0, 1) * (rel > 0.25 ? 0.4 : 1);
+                t.veg += (target - t.veg) * 0.009 * step;
+                const cap = BIOMES[t.biome].food;
+                if (cap > 0 && t.food < cap * 0.1) t.veg -= 0.0015 * step;
+                t.veg -= dry * 0.002 * step;
+                t.veg = clamp(t.veg, 0, 1);
+            }
+
+            const want = this.classify(t, rel);
+            if (want !== t.biome) {
+                if (t.pend === want) t.pendN++;
+                else { t.pend = want; t.pendN = 1; }
+                if (t.pendN >= 4) {
+                    t.biome = want;
+                    t.pend = -1;
+                    t.pendN = 0;
+                    t.height = this.heightFor(t, sea);
+                    this.applyBiome(t);
+                    changed.push(t);
+                    continue;
+                }
+            } else {
+                t.pend = -1;
+                t.pendN = 0;
+            }
+            const h = this.heightFor(t, sea);
+            if (Math.abs(h - t.height) > 0.01) {
+                t.height = h;
+                this.animating.add(t);
+                if (t.biome === B.WATER) this.meshes[t.i].material = this.materialFor(t);
+            }
+        }
+        return changed;
+    }
+
+    // Lightning sets a forest on fire. It grows back as meadow.
+    burn(t) {
+        if (!t || t.biome !== B.FOREST) return false;
+        t.veg = 0.25;
+        t.food *= 0.3;
+        t.biome = B.MEADOW;
+        t.pend = -1;
+        t.pendN = 0;
+        this.applyBiome(t);
         return true;
+    }
+
+    stats() {
+        let land = 0, peak = 0, deep = 0;
+        for (const t of this.tiles) {
+            if (t.biome === B.WATER) deep = Math.max(deep, WATER_H - t.height);
+            else { land++; peak = Math.max(peak, t.height); }
+        }
+        return { land, peak, deep };
     }
 
     feed(t) {
@@ -284,7 +483,6 @@ export class World {
             if (Math.abs(diff) < 0.01) {
                 t.rh = t.height;
                 this.animating.delete(t);
-                if (t.biome === B.WATER) this.meshes[t.i].visible = false;
             } else {
                 t.rh += diff * Math.min(1, dt * 7);
             }
@@ -355,6 +553,7 @@ export class World {
             if (o.geometry && o.geometry !== tileGeo) o.geometry.dispose();
         });
         this.materials.forEach(m => m.dispose());
+        this.seabedMats.forEach(m => m.dispose());
         this.crownMat.dispose();
     }
 }
