@@ -1011,6 +1011,8 @@ ol.records .sc { text-align: right; font-family: var(--display); font-size: 17px
 /* Phones: the top bar holds four buttons on the right, so everything gets a bit tighter. */
 @media (max-width: 560px) {
     #timebar { gap: 4px; padding: 6px; }
-    #timebar .icon-btn, #timebar .panel-toggle { width: 30px; height: 30px; }
-    .speed button { min-width: 26px; padding-left: 4px; padding-right: 4px; }
+    #timebar .icon-btn, #timebar .panel-toggle { width: 28px; height: 28px; }
+    .speed button { min-width: 24px; padding-left: 3px; padding-right: 3px; }
+    /* Six speed buttons do not fit next to the icons. 3x is the one phones can miss. */
+    .speed button[data-speed="3"] { display: none; }
 }

@@ -312,12 +312,14 @@ function frame(now) {
     if (game.world && !game.paused && !state.overlay) {
         acc += dt * game.speed;
         let steps = 0;
-        while (acc >= SIM_STEP && steps < 40) {
+        // 50x at 30 frames needs 50 steps per frame. If a slow computer cannot keep up,
+        // the game slows down instead of piling up work.
+        while (acc >= SIM_STEP && steps < 60) {
             game.step(SIM_STEP);
             acc -= SIM_STEP;
             steps++;
         }
-        if (steps >= 40) acc = 0;
+        if (steps >= 60) acc = 0;
     }
     game.animate(dt);
     plantTimer -= dt;
