@@ -1,5 +1,6 @@
 import { SCORE_KEY, MODES } from './config.js';
 import { mulberry32 } from './rng.js';
+import { cleanRecord } from './validate.js';
 
 const KEEP = 40;
 const PRE = ['Mo', 'Ka', 'Lu', 'Tavi', 'Ne', 'Oro', 'Pela', 'Si', 'Wa', 'Zu', 'Iri', 'Bel', 'Quo', 'Ama', 'Fen', 'Ruk'];
@@ -21,7 +22,7 @@ export function scoreOf(r) {
 export function loadRecords() {
     try {
         const list = JSON.parse(localStorage.getItem(SCORE_KEY) || '[]');
-        return Array.isArray(list) ? list.filter(r => r && r.id && typeof r.score === 'number') : [];
+        return Array.isArray(list) ? list.slice(0, 200).map(cleanRecord).filter(Boolean) : [];
     } catch (e) {
         return [];
     }

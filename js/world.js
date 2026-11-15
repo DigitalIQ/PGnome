@@ -413,6 +413,7 @@ export class World {
     }
 
     applyBiome(t) {
+        this.islandCache = null;
         t.food = Math.min(t.food, this.capFor(t) * (this.living ? 0.6 : 0.3));
         if (this.bloom) this.bloom[t.i] = 0;
         const mesh = this.meshes[t.i];
@@ -534,6 +535,34 @@ export class World {
         return true;
     }
 
+    // Which island every tile belongs to. The biggest island is the main one.
+    islands() {
+        if (this.islandCache) return this.islandCache;
+        const s = this.size, ids = new Int16Array(s * s).fill(-1), sizes = [];
+        for (const t of this.tiles) {
+            if (!BIOMES[t.biome].walkable || ids[t.i] >= 0) continue;
+            const id = sizes.length;
+            let n = 0;
+            const q = [t.i];
+            ids[t.i] = id;
+            while (q.length) {
+                const i = q.pop();
+                n++;
+                const x = i % s, z = (i - x) / s;
+                for (const [dx, dz] of DIRS4) {
+                    const nx = x + dx, nz = z + dz;
+                    if (nx < 0 || nz < 0 || nx >= s || nz >= s) continue;
+                    const j = nz * s + nx;
+                    if (ids[j] < 0 && BIOMES[this.tiles[j].biome].walkable) { ids[j] = id; q.push(j); }
+                }
+            }
+            sizes.push(n);
+        }
+        const main = sizes.indexOf(Math.max(0, ...sizes));
+        this.islandCache = { ids, sizes, main, count: sizes.filter(n => n >= 6).length };
+        return this.islandCache;
+    }
+
     stats() {
         let land = 0, peak = 0, deep = 0;
         for (const t of this.tiles) {
@@ -648,3 +677,4 @@ export class World {
 }
 
 const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];

@@ -1,0 +1,3 @@
+three.js 0.160.0 from the npm registry.
+Tarball integrity: sha512-DLU8lc0zNIPkM7rH5/e1Ks1Z8tWCGRq6g8mPowdDJpw1CFBJMU7UoJjC6PefXW7z//SSl0b2+GCw14LB+uDhng==
+Files copied unchanged: build/three.module.js, examples/jsm/controls/OrbitControls.js, examples/jsm/utils/BufferGeometryUtils.js, LICENSE.

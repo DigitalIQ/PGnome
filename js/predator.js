@@ -171,6 +171,7 @@ export class Hawk {
         for (const [c, w] of options) { r -= w; if (r <= 0) { best = c; bestW = w; break; } }
         best = best || options[0][0];
         this.target = best;
+        g.stats.hawk.dives++;
         this.state = 'dive';
         this.diveT = 0;
         this.circle.set(best.x, CRUISE, best.z);
@@ -199,6 +200,8 @@ export class Hawk {
                 if (c.huddle >= 2) chance *= 0.8;
                 caught = Math.random() < chance;
             }
+            if (caught) g.stats.hawk.catches++;
+            else if (!c.dead) g.stats.hawk.escapes++;
             if (caught) {
                 g.burst(c.x, c.y + 0.4, c.z, 'spark', 0x8a6a48, 8);
                 g.kill(c, 'was caught by a hawk');

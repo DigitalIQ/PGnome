@@ -3,21 +3,14 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'sha256-gh7NRJ7MEWdYUGMcXx0SUMJY93gUi2UqlztG1amlvwA='; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+    <meta name="referrer" content="no-referrer">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PGNome: Island Evolution</title>
     <meta name="description" content="Shape a small island and watch a population of Nomes adapt to it, generation after generation.">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="style.css">
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-            }
-        }
-    </script>
+    <script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/addons/"}}</script>
 </head>
 
 <body>
@@ -81,11 +74,14 @@
                 <button data-speed="3" title="Fast">3x</button>
                 <button data-speed="8" title="Very fast">8x</button>
             </div>
-            <button id="btn-records" class="icon-btn" title="Island records">
+            <button id="btn-stats" class="icon-btn" title="Statistics" aria-label="Statistics">
+                <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+            </button>
+            <button id="btn-records" class="icon-btn" title="Island records" aria-label="Island records">
                 <svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0V4zM8 6H5v1a3 3 0 0 0 3 3M16 6h3v1a3 3 0 0 1-3 3M12 13v4M8 20h8M10 17h4"/></svg>
             </button>
-            <button id="btn-panel" class="panel-toggle" title="Population and goals">
-                <svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg>
+            <button id="btn-panel" class="panel-toggle" title="Population and goals" aria-label="Population and goals">
+                <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
             </button>
         </div>
 
@@ -169,6 +165,16 @@
                 <div class="start-records-head"><h2>Best runs</h2><button id="btn-all-records" class="link">All records</button></div>
                 <div id="start-records"></div>
             </div>
+        </div>
+    </div>
+
+    <div id="stats" class="overlay hidden" role="dialog" aria-labelledby="stats-title">
+        <div class="card stats-card">
+            <button class="close" id="stats-close" title="Close (Esc)">&times;</button>
+            <h1 id="stats-title">Statistics</h1>
+            <p class="st-sub" id="stats-sub"></p>
+            <div class="tabs st-tabs" id="stats-tabs" role="tablist"></div>
+            <div id="stats-body"></div>
         </div>
     </div>
 

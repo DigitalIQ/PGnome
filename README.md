@@ -18,6 +18,7 @@ PGNome is a small evolution sandbox in the browser. A handful of creatures, the 
 - **Island records.** Each seed has a fixed island name. Runs are scored by years survived, generations, peak population and goals, and the best runs show up on a records board per island and overall.
 - **Your tools.** Inspect, carry Nomes, scatter food and paint terrain: meadow, forest, water, sand, marsh and rock. Water blocks paths, rock raises the ground and is cold.
 - **Read-outs.** Population graph with season bands (plus land area on living islands), gene pool ranges, body plan shares, island size and height, a log, and nine goals.
+- **Statistics.** A statistics window with seven tabs: overview and a year table, population, land and hawks over time, the spread and drift of every gene, body plans, causes of death, weather and food sources, and notable Nomes you can jump to.
 - **Saves itself.** The game autosaves to the browser and offers "Continue" on the next visit.
 
 ## Controls
@@ -41,7 +42,15 @@ The game uses ES modules, so it needs a web server. Opening `index.html` from th
 python3 -m http.server 8000
 ```
 
-Then open http://localhost:8000. Three.js 0.160 loads from jsDelivr, so the first start needs an internet connection.
+Then open http://localhost:8000. Everything is self-hosted, so the game also runs offline.
+
+## Security
+
+The game is a static page with no backend, no accounts and no secrets.
+
+- Three.js 0.160.0 is vendored in `vendor/three/`, copied unchanged from the npm tarball whose sha512 matches the registry (see `vendor/three/SOURCE.txt`). Fonts are self-hosted in `fonts/`. The page makes no third-party requests.
+- A Content Security Policy in `index.html` only allows scripts from the site itself plus the hashed import map. If you edit the import map, update its `sha256-` hash.
+- Saves and records come from `localStorage`, which every GitHub Pages site of the same account shares. `js/validate.js` rebuilds them from known fields and value ranges before the game uses them.
 
 ## Code layout
 
@@ -54,6 +63,9 @@ Then open http://localhost:8000. Three.js 0.160 loads from jsDelivr, so the firs
 | `js/weather.js` | Weather spells and their effects |
 | `js/sky.js` | Rain, snow and fog rendering |
 | `js/scores.js` | Island names, scores and the records board |
+| `js/stats.js` | The statistics window and its charts |
+| `js/predator.js` | Hawks |
+| `js/validate.js` | Cleans saves and records read from localStorage |
 | `js/game.js` | Simulation loop, seasons, breeding, goals, saving |
 | `js/ui.js` | Panels, graph, log and overlays |
 | `js/input.js` | Mouse, touch and keyboard |

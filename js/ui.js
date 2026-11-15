@@ -90,6 +90,7 @@ export class UI {
         $('seed-input').addEventListener('keydown', e => { if (e.key === 'Enter') actions.newWorld(e.target.value); });
         document.querySelectorAll('.mode').forEach(b => b.addEventListener('click', () => actions.setMode(b.dataset.mode)));
         $('btn-records').addEventListener('click', () => actions.showRecords());
+        $('btn-stats').addEventListener('click', () => actions.showStats());
         $('btn-all-records').addEventListener('click', () => actions.showRecords());
         $('records-close').addEventListener('click', () => actions.closeRecords());
         $('records').addEventListener('click', e => { if (e.target.id === 'records') actions.closeRecords(); });
@@ -267,21 +268,6 @@ export class UI {
         ctx.closePath();
         ctx.fillStyle = 'rgba(155,211,110,0.15)';
         ctx.fill();
-        if (this.game.world.living && h.some(p => p.land)) {
-            const lands = h.map(p => p.land || 0);
-            const lmin = Math.min(...lands), lmax = Math.max(...lands, lmin + 20);
-            const ly = v => H - pad - ((v - lmin) / (lmax - lmin)) * (H - pad * 2 - 14);
-            ctx.beginPath();
-            h.forEach((p, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, pad + i * step, ly(p.land || lmin)));
-            ctx.setLineDash([8, 6]);
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = 'rgba(111,179,224,0.85)';
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = 'rgba(111,179,224,0.85)';
-            ctx.font = '600 20px Figtree, sans-serif';
-            ctx.fillText('land', 12, 20);
-        }
         ctx.fillStyle = 'rgba(236,228,208,0.6)';
         ctx.font = '600 20px Figtree, sans-serif';
         ctx.fillText(`peak ${max}`, W - 110, 20);

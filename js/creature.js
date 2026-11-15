@@ -504,6 +504,9 @@ export class Creature {
         const take = Math.min(tile.food, bite);
         tile.food -= take;
         this.energy += take * 80 + nectar * 110;
+        const food = this.game.stats.food;
+        if (nectar) food.nectar += nectar;
+        if (take) { if (tile.biome === B.WATER) food.seaweed += take; else food.plants += take; }
         this.status = nectar > 0 ? 'Drinking moonflower nectar' : tile.biome === B.WATER ? 'Grazing seaweed'
             : this.sharing > 0 && this.genes.horns > 0.5 ? 'Eating, pushing others away' : 'Eating';
     }

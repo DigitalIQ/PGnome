@@ -5,6 +5,7 @@ import { UI } from './ui.js';
 import { setupInput } from './input.js';
 import { Sky } from './sky.js';
 import { setNightGlow } from './body.js';
+import { StatsView } from './stats.js';
 import { SIM_STEP } from './config.js';
 import { randomSeed, clamp } from './rng.js';
 
@@ -175,6 +176,24 @@ const actions = {
         ui.hideRecords();
         state.overlay = !!state.recordsFrom;
     },
+    showStats() {
+        if (!game.world) return;
+        state.statsFrom = state.overlay;
+        state.overlay = true;
+        stats.show();
+    },
+    closeStats() {
+        stats.hide();
+        state.overlay = !!state.statsFrom;
+    },
+    // From the notables tab: close the window, select the Nome and follow it.
+    showNome(id) {
+        const c = game.creatures.find(x => x.id === id);
+        actions.closeStats();
+        if (!c) return;
+        actions.select({ creature: c });
+        game.follow = true;
+    },
     continueSaved() {
         const data = Game.loadSaved();
         if (!data) { actions.newWorld(''); return; }
@@ -209,6 +228,7 @@ function start(reframe = true) {
 }
 
 const ui = new UI(game, actions);
+const stats = new StatsView(game, actions);
 ui.setMode(state.mode);
 const input = setupInput({ renderer, camera, controls, scene, game, actions, state });
 ui.setTool(state.tool);

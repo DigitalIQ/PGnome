@@ -7,6 +7,9 @@ import { rand, mulberry32 } from './rng.js';
 import { Weather } from './weather.js';
 import { Hawk } from './predator.js';
 import { islandName, submitRecord } from './scores.js';
+import { cleanSave } from './validate.js';
+
+export const STAT_GENES = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2');
 
 export class Game {
     constructor(scene) {
@@ -48,8 +51,10 @@ export class Game {
         this.selected = null;
         this.follow = false;
         this.time = YEAR_LENGTH * 0.12;
-        this.stats = { births: 0, deaths: 0, maxGen: 1, peakPop: 0, causes: {} };
+        this.stats = Game.emptyStats();
         this.history = [];
+        this.longHistory = [];
+        this.longTimer = 0;
         this.events = [];
         this.eventId = 0;
         this.goals = {};
@@ -69,6 +74,26 @@ export class Game {
     }
 
     get islandName() { return islandName(this.seed); }
+
+    static emptyStats() {
+        return {
+            births: 0, deaths: 0, maxGen: 1, peakPop: 0, causes: {}, twins: 0, plans: {},
+            weather: {}, strikes: 0, burned: 0, hawk: { dives: 0, catches: 0, escapes: 0 },
+            food: { plants: 0, seaweed: 0, nectar: 0, fed: 0 }, deathAge: { sum: 0, n: 0 }, years: []
+        };
+    }
+
+    // Births, deaths and the population range per year, for the statistics.
+    yearEntry() {
+        const y = this.year, list = this.stats.years;
+        let e = list[list.length - 1];
+        if (!e || e.y !== y) {
+            e = { y, births: 0, deaths: 0, peak: this.creatures.length, low: this.creatures.length };
+            list.push(e);
+            if (list.length > 200) list.shift();
+        }
+        return e;
+    }
 
     startRun() {
         this.run = { id: Date.now().toString(36) + Math.floor(Math.random() * 1e4), start: this.time, startGoals: Object.keys(this.goals).length };
@@ -112,8 +137,9 @@ export class Game {
         this.world = new World(this.scene, data.seed, data.tiles, this.mode);
         this.weather = new Weather(data.weather);
         this.time = data.time;
-        this.stats = { ...this.stats, ...data.stats };
+        this.stats = { ...Game.emptyStats(), ...data.stats };
         this.history = data.history || [];
+        this.longHistory = data.longHistory || [];
         this.goals = data.goals || {};
         this.mutationRate = data.mutationRate ?? 1;
         this.hawksOn = data.hawksOn ?? true;
@@ -141,6 +167,7 @@ export class Game {
             creatures: this.creatures.map(c => c.serialize()),
             stats: this.stats,
             history: this.history,
+            longHistory: this.longHistory,
             goals: this.goals,
             mutationRate: this.mutationRate,
             mode: this.mode,
@@ -169,8 +196,7 @@ export class Game {
         try {
             const raw = localStorage.getItem(SAVE_KEY);
             if (!raw) return null;
-            const data = JSON.parse(raw);
-            return data && data.v === 2 && data.creatures?.length ? data : null;
+            return cleanSave(JSON.parse(raw));
         } catch (e) {
             return null;
         }
@@ -292,6 +318,7 @@ export class Game {
             p.thinkTimer = rand(0.5, 1.5);
         }
         this.stats.births += count;
+        this.yearEntry().births += count;
         const legs = legCount(child.genes.legs);
         const plans = this.stats.plans || (this.stats.plans = {});
         if (!plans[legs]) {
@@ -320,6 +347,9 @@ export class Game {
         this.dying.push(c);
         this.stats.deaths++;
         this.stats.causes[cause] = (this.stats.causes[cause] || 0) + 1;
+        this.stats.deathAge.sum += c.age;
+        this.stats.deathAge.n++;
+        this.yearEntry().deaths++;
         this.burst(c.x, c.y + 0.4, c.z, 'spark', 0xcfd8dc, 4);
         if (this.selected && this.selected.creature === c) {
             this.log(`${c.name} ${cause} at age ${Math.floor(c.age)}.`, 'death');
@@ -348,6 +378,7 @@ export class Game {
 
     feed(tile) {
         if (!this.world.feed(tile)) return false;
+        this.stats.food.fed++;
         this.burst(tile.x, tile.rh + 0.3, tile.z, 'spark', 0xa6e36b, 7);
         return true;
     }
@@ -362,6 +393,8 @@ export class Game {
         this.lastSeason = season;
 
         const w = this.weather.update(dt, season);
+        const wk = this.weather.key;
+        this.stats.weather[wk] = (this.stats.weather[wk] || 0) + dt;
         if (w) this.onWeather(w);
         this.world.grow(dt, this.growth, this.night);
         const changed = this.world.evolve(dt, this.time, this.weather.now);
@@ -387,6 +420,14 @@ export class Game {
             if (this.world.living) this.watchIsland(ws);
             if (this.history.length > 240) this.history.shift();
             this.stats.peakPop = Math.max(this.stats.peakPop, this.creatures.length);
+            const ye = this.yearEntry();
+            ye.peak = Math.max(ye.peak, this.creatures.length);
+            ye.low = Math.min(ye.low, this.creatures.length);
+        }
+        this.longTimer += dt;
+        if (this.longTimer >= 10) {
+            this.longTimer = 0;
+            this.sampleLong();
         }
         this.goalTimer += dt;
         if (this.goalTimer >= 1) {
@@ -404,6 +445,37 @@ export class Game {
         ];
         this.log(msgs[season], 'season');
         if (season === 0 && prev === 3 && this.creatures.length >= 30) this.completeGoal('winter');
+    }
+
+    // A slow sample every 10 seconds for the long-term statistics: population, land,
+    // hawks, where the Nomes live and the average of every gene.
+    sampleLong() {
+        const n = this.creatures.length;
+        const where = this.whereNomesLive();
+        const g = STAT_GENES.map(k => {
+            if (!n) return null;
+            let s = 0;
+            for (const c of this.creatures) s += c.genes[k];
+            return Math.round(s / n * 1000) / 1000;
+        });
+        this.longHistory.push({
+            t: Math.round(this.time), pop: n, land: this.world.stats().land,
+            hawks: this.hawks.filter(h => !h.leaving && !h.away).length, sat: where.satellite, water: where.water, g
+        });
+        if (this.longHistory.length > 1000) this.longHistory.shift();
+    }
+
+    whereNomesLive() {
+        const { ids, main } = this.world.islands();
+        const out = { main: 0, satellite: 0, water: 0 };
+        for (const c of this.creatures) {
+            const t = this.world.tileAt(c.x, c.z);
+            if (!t) continue;
+            if (!isWalkable(t)) out.water++;
+            else if (ids[t.i] === main) out.main++;
+            else out.satellite++;
+        }
+        return out;
     }
 
     onWeather(key) {
@@ -447,9 +519,11 @@ export class Game {
             t = forests.length && Math.random() < 0.5 ? forests[Math.floor(Math.random() * forests.length)] : land[Math.floor(Math.random() * land.length)];
         }
         this.flash = 1;
+        this.stats.strikes++;
         this.strike = { x: t.x, y: t.rh, z: t.z, age: 0 };
         this.burst(t.x, t.rh + 0.4, t.z, 'spark', 0xfff6a8, 10);
         if (this.world.living && this.world.burn(t)) {
+            this.stats.burned++;
             this.onTerrain([t]);
             this.burst(t.x, t.rh + 0.6, t.z, 'spark', 0xff7a3c, 8);
             this.burst(t.x, t.rh + 0.5, t.z, 'smoke', 0x6b6b6b, 6);
