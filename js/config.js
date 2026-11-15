@@ -43,14 +43,16 @@ export const HAWK_GENES = {
     eyes: { label: 'Sharp eyes', min: 0.6, max: 1.5 },
     size: { label: 'Size', min: 0.7, max: 1.5 },
     night: { label: 'Night hunting', min: 0, max: 1 },
-    stealth: { label: 'Stealth', min: 0, max: 1 }
+    stealth: { label: 'Stealth', min: 0, max: 1 },
+    lifespan: { label: 'Lifespan', min: 400, max: 1000 }
 };
 export const LURKER_GENES = {
     camo: { label: 'Camouflage', min: 0, max: 1 },
     strike: { label: 'Strike speed', min: 0.6, max: 1.5 },
     venom: { label: 'Venom', min: 0, max: 1 },
     size: { label: 'Size', min: 0.7, max: 1.4 },
-    habitat: { label: 'Forest liking', min: 0, max: 1 }
+    habitat: { label: 'Forest liking', min: 0, max: 1 },
+    lifespan: { label: 'Lifespan', min: 500, max: 1200 }
 };
 
 export const DISASTERS = {

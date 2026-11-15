@@ -687,7 +687,10 @@ export class World {
     ignite(t) {
         if (!t || t.fire > 0 || t.lava > 0) return false;
         if (t.biome !== B.FOREST && t.biome !== B.MEADOW && !(t.biome === B.MARSH && t.veg > 0.6)) return false;
-        t.fire = 5 + Math.random() * 5;
+        // Forests hold the most fuel, meadows burn out quickly. Wind and drought feed the fire.
+        const fuel = t.biome === B.FOREST ? 9 : t.biome === B.MARSH ? 3 : 4;
+        const w = this.weatherNow || {};
+        t.fire = fuel * (1 + Math.max(0, -(w.wet || 0)) / 25 + (w.wind || 0) * 0.3) * (0.7 + Math.random() * 0.6);
         return true;
     }
 

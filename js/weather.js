@@ -50,7 +50,9 @@ export class Weather {
             const after = WET.includes(this.key) && Math.random() < 0.4 && season !== 3 ? 'rainbow' : fit(pick(season, this.key), season);
             changed = this.set(after) || changed;
             const short = { storm: 0.6, rainbow: 0.45, downpour: 0.6, hail: 0.5, blizzard: 0.7 }[this.key] || 1;
-            this.timer = rand(18, 45) * short;
+            // Summer and winter weather holds longer, spring and autumn change often.
+            const steady = season === 1 || season === 3 ? 1.25 : 0.8;
+            this.timer = rand(18, 45) * short * steady;
         }
         if (this.blend < 1) this.blend = Math.min(1, this.blend + dt / BLEND_TIME);
         this.mix();

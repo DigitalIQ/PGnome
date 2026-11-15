@@ -134,7 +134,7 @@ export class Hawk {
         const g = this.game, ge = this.genes;
         this.age += dt;
         // Bigger and faster birds need more food.
-        this.energy -= (0.3 + ge.size * 0.18 + (ge.dive - 1) * 0.12 + ge.night * 0.04) * dt;
+        this.energy -= (0.3 + ge.size * 0.18 + (ge.dive - 1) * 0.12 + ge.night * 0.04 + (ge.lifespan - 400) * 0.0001) * dt;
         if (this.leaving || (!this.canHunt && this.state !== 'dive')) {
             this.flyAway(dt);
             return;
@@ -274,7 +274,9 @@ export class Hawk {
     endDive(fed) {
         this.state = 'climb';
         this.target = null;
-        this.cool = fed ? rand(14, 22) : rand(2, 4);
+        // Big birds digest longer and recover slower after a miss. A hungry hawk is back sooner.
+        const ge = this.genes, hunger = this.energy < 40 ? 0.7 : 1;
+        this.cool = (fed ? (10 + ge.size * 10) : (1 + ge.size * 1.5 + (1 - ge.stealth) * 0.8)) * hunger * rand(0.85, 1.15);
     }
 
     // ---------- Rendering ----------
@@ -379,7 +381,7 @@ export class Lurker {
         this.age += dt;
         // Cold-blooded: lurkers burn little, but winter slows them down.
         const cold = g.seasonIndex === 3 ? 0.5 : 1;
-        this.energy -= (0.13 + ge.size * 0.07 + ge.venom * 0.04) * dt * cold;
+        this.energy -= (0.13 + ge.size * 0.07 + ge.venom * 0.04 + (ge.lifespan - 500) * 0.00008) * dt * cold;
         const here = world.tileAt(this.x, this.z);
         if (!here || here.biome === B.LAVA || here.fire > 0 || !isWalkable(here)) {
             if (here && (here.biome === B.LAVA || here.fire > 0)) { this.energy = -1; return; }
@@ -440,7 +442,7 @@ export class Lurker {
                 g.stats.lurker.catches++;
                 this.energy += 30 + size * 25;
                 // A full lurker digests for a long while.
-                this.cool = rand(25, 40);
+                this.cool = (15 + ge.size * 20) * (this.game.seasonIndex === 3 ? 1.6 : 1) * rand(0.85, 1.15);
                 g.burst(c.x, c.y + 0.3, c.z, 'spark', 0x6b8a3a, 7);
                 g.kill(c, 'was caught by a lurker');
                 return;

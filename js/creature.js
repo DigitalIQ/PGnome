@@ -197,6 +197,11 @@ export class Creature {
         return base * (1 - this.genes.vigilance * 0.7);
     }
 
+    // How long a bad experience is remembered: good senses and taste remember longer.
+    get memory() {
+        return 30 + this.genes.sight * 5 + this.genes.palate * 40;
+    }
+
     // Seconds left of the current task, for the info panel.
     get busyLeft() {
         if (this.action === 'eat' && this.meal) return this.meal.t;
@@ -300,7 +305,7 @@ export class Creature {
         // Stress costs energy and wears the body out faster.
         if (this.stress > 0.05) {
             burn += this.stress * 0.22;
-            this.age += this.stress * 0.35 * dt;
+            this.age += this.stress * 0.2 * dt;
         }
         if (this.plague > 0) burn += 0.35 * (1 - g.immunity * 0.85);
         if (!this.adult) burn *= 0.7;
@@ -328,7 +333,7 @@ export class Creature {
         if (this.plague > 0) {
             this.health -= (1 - g.immunity * 0.85) * 2.2 * dt;
             this.plague -= dt * (0.6 + g.metabolism * 0.6);
-            if (this.plague <= 0) { this.plague = 0; this.immuneT = 240; }
+            if (this.plague <= 0) { this.plague = 0; this.immuneT = 80 + g.immunity * 320; }
         }
         if (this.immuneT > 0) this.immuneT -= dt;
         const ill = this.poison > 0.2 || this.plague > 0;
@@ -385,7 +390,8 @@ export class Creature {
 
     think() {
         const game = this.game, world = game.world, g = this.genes, t = this.t;
-        this.thinkTimer = rand(1.0, 1.6);
+        // Fast metabolism and curiosity make quick deciders, slow ones take their time.
+        this.thinkTimer = 1.3 * (1.25 - 0.5 * g.metabolism) * (1.1 - 0.3 * g.curiosity) * rand(0.8, 1.2);
         const start = world.tileAt(this.x, this.z);
         const swim = t.swimmer;
         this.newOffset();
@@ -407,7 +413,9 @@ export class Creature {
         this.lonely = g.sociability > 0.6 && near === 0;
         // How many neighbours a Nome can stand depends on its sociability.
         const tolerance = 8 + g.sociability * 14;
-        this.stress += (clamp((near - tolerance) / 15, 0, 1.5) - this.stress) * 0.15;
+        // Crowds hurt most when food is short. In good times Nomes put up with more company.
+        const scarcity = clamp(1.4 - game.foodPerNome / 6, 0.3, 1.2);
+        this.stress += (clamp((near - tolerance) / 15 * scarcity, 0, 1.5) - this.stress) * 0.15;
         this.crowded = this.stress > 0.3;
 
         // Forget poison spots after a while.
@@ -661,7 +669,7 @@ export class Creature {
             // A good taste catches poison before it is swallowed.
             const dose = tile.tox * FOODS[kind].tox;
             if (dose > 0.12 + g.toxinRes * 0.7 && Math.random() < g.palate * 0.85) {
-                this.avoid.set(tile.i, game.time + 60);
+                this.avoid.set(tile.i, game.time + this.memory);
                 game.stats.poison.spat++;
                 this.status = `Spat out bitter ${FOODS[kind].name.toLowerCase()}`;
                 this.action = 'idle';
@@ -701,7 +709,7 @@ export class Creature {
             if (this.poison < 0.2 && this.poison + harm >= 0.2) game.stats.poison.cases++;
             this.poison = Math.min(3, this.poison + harm);
             this.status = 'Feeling sick';
-            if (this.poison > 0.25) this.avoid.set(tile.i, game.time + 90);
+            if (this.poison > 0.25) this.avoid.set(tile.i, game.time + this.memory * 1.5);
         }
     }
 
@@ -812,7 +820,8 @@ export class Creature {
         const start = world.tileAt(this.x, this.z);
         if (!start || this.dead || this.dragged) return;
         if (this.partner) this.stopCourting();
-        this.fleeTimer = 3;
+        // Alert Nomes stay on guard longer, stressed ones panic longer.
+        this.fleeTimer = 1.5 + this.genes.vigilance * 2 + this.stress;
         this.meal = null;
         if (this.job) { this.job = null; }
         if (start.biome === B.FOREST) { this.status = 'Hiding under the trees'; return; }
@@ -833,7 +842,8 @@ export class Creature {
         this.partner = p;
         this.path = [];
         this.mateTimer = 0;
-        this.mateGiveUp = 14;
+        // Picky and social Nomes court with more patience.
+        this.mateGiveUp = 8 + this.genes.pickiness * 10 + this.genes.sociability * 4;
         this.courtT = 0;
         // Picky Nomes court longer, attractive partners win them over faster.
         this.courtNeed = Math.max(0.6, 1.2 + this.genes.pickiness * 2.2 - p.t.attract * 0.6);

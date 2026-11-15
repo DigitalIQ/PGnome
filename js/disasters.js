@@ -38,8 +38,8 @@ export class Disasters {
                 // Nature gives a small population time to recover.
                 if (g.creatures.length < 30) this.next = 30;
                 else {
-                    this.next = YEAR_LENGTH * rand(1, 1.8);
                     this.trigger(this.pick());
+                    this.next = this.interval();
                 }
             }
         }
@@ -67,6 +67,17 @@ export class Disasters {
             if (w.entry.after >= 20) g.completeGoal('disaster');
             this.watches.splice(i, 1);
         }
+    }
+
+    // Time until the next disaster. A restless living island strikes more often,
+    // a dense population draws disease sooner, a quiet classic island waits longer.
+    interval() {
+        const g = this.game;
+        let f = rand(0.9, 1.7);
+        if (g.world.living) f *= g.world.hotspot(g.time).power > 0.0004 ? 0.65 : 0.9;
+        else f *= 1.1;
+        f *= 1.15 - Math.min(0.3, (g.meanStress || 0) * 0.6);
+        return YEAR_LENGTH * f;
     }
 
     // Which disaster fits the moment.
@@ -155,7 +166,10 @@ export class Disasters {
         if (changed.length) g.onTerrain(changed);
         g.shake = 1.6;
         g.log(`An earthquake! A rift of ${changed.length} tiles opens across ${g.islandName}.`, 'death');
-        if (Math.random() < 0.35) this.queue.push({ kind: 'tsunami', t: 6, opts: { quiet: false } });
+        // A long rift near the coast is likely to send a wave. The wave arrives later when the quake was far inland.
+        let coast = 99;
+        for (const t of world.tiles) if (t.biome === B.WATER && t.height < 0.2) coast = Math.min(coast, Math.hypot(t.x - epi.x, t.z - epi.z));
+        if (Math.random() < clamp(0.05 + len / 30 - coast * 0.03, 0.03, 0.75)) this.queue.push({ kind: 'tsunami', t: 2 + coast * 0.8, opts: {} });
         return true;
     }
 
@@ -175,9 +189,11 @@ export class Disasters {
                 vent = land[Math.floor(Math.random() * Math.min(8, land.length))];
             }
         }
-        world.setLava(vent, 140);
-        this.eruption = { vent, t: 24, spawn: 0, fronts: [] };
-        g.ash = Math.min(1, g.ash + 0.55);
+        // Each eruption has its own strength: a hot spot under a living island makes it stronger.
+        const strength = clamp(rand(0.3, 1) + (world.living ? world.hotspot(g.time).power * 150 : 0), 0.3, 1.4);
+        world.setLava(vent, 90 + strength * 60);
+        this.eruption = { vent, strength, t: 12 + strength * 22, spawn: 0, fronts: [] };
+        g.ash = Math.min(1, g.ash + 0.25 + strength * 0.35);
         g.shake = 1.1;
         g.onTerrain([vent]);
         g.log('A volcano erupts! Lava flows downhill, ash darkens the sky. Lava that reaches the sea becomes new land.', 'death');
@@ -202,7 +218,8 @@ export class Disasters {
             g.burst(best.x, 0.6, best.z, 'smoke', 0xf2f2f2, 4);
             front.n -= 2;
         } else {
-            world.setLava(best, 45 + Math.random() * 35);
+            const st = this.eruption ? this.eruption.strength : 0.6;
+            world.setLava(best, (30 + st * 45) * rand(0.8, 1.2));
             front.n--;
         }
         front.tile = best;
@@ -306,7 +323,8 @@ export class Disasters {
     }
 
     infect(c) {
-        c.plague = 25 + Math.random() * 15;
+        // Strong immunity and calm Nomes get over it faster.
+        c.plague = (14 + 22 * (1 - c.genes.immunity)) * (1 + c.stress * 0.5) * rand(0.85, 1.15);
         this.game.stats.plague.cases++;
     }
 
@@ -334,7 +352,7 @@ export class Disasters {
         if (e) {
             e.t -= step;
             e.spawn -= step;
-            if (e.spawn <= 0 && e.t > 0) { e.fronts.push({ tile: e.vent, n: 5 + Math.random() * 9 }); e.spawn = 2.6; }
+            if (e.spawn <= 0 && e.t > 0) { e.fronts.push({ tile: e.vent, n: (4 + Math.random() * 6) * (0.6 + e.strength) }); e.spawn = (4 - e.strength * 2) * rand(0.8, 1.2); }
             for (const f of e.fronts) { const t = this.flow(f); if (t) changed.push(t); }
             e.fronts = e.fronts.filter(f => f.n > 0);
             g.burst(e.vent.x, e.vent.rh + 0.8, e.vent.z, 'smoke', 0x3a3633, 2);
@@ -355,7 +373,8 @@ export class Disasters {
         let fires = 0;
         for (const t of world.tiles) {
             if (t.biome === B.LAVA) {
-                t.lava -= step;
+                // Rain and snow cool lava faster.
+                t.lava -= step * (1 + (w.rain || 0) * 0.8 + (w.snow || 0) * 0.5);
                 if (t.lava <= 0) { world.solidify(t); changed.push(t); continue; }
                 for (let oz = -2; oz <= 2; oz++) for (let ox = -2; ox <= 2; ox++) {
                     const x = t.x + ox, z = t.z + oz;

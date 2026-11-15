@@ -108,8 +108,8 @@ export function cleanSave(d) {
         sat: int(h.sat, 0, MAX_POP), water: int(h.water, 0, MAX_POP),
         g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : [],
         lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096), stress: num(h.stress, 0, 1.5, 0),
-        hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null,
-        lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null
+        hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
+        lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null
     })) : [];
     const predators = Array.isArray(d.predators) ? d.predators.slice(0, 20).filter(isObj).map(p => {
         const table = p.kind === 'hawk' ? HAWK_GENES : p.kind === 'lurker' ? LURKER_GENES : null;

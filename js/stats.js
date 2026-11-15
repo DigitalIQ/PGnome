@@ -308,7 +308,7 @@ export class StatsView {
             if (!list.length) return '<p class="hint">None right now.</p>';
             return bars(Object.entries(table).map(([k, d]) => {
                 const v = list.reduce((a, p) => a + p.genes[k], 0) / list.length;
-                return { label: d.label, value: (v - d.min) / (d.max - d.min) * 100, text: d.max === 1 ? Math.round(v * 100) + '%' : v.toFixed(2), noShare: true };
+                return { label: d.label, value: (v - d.min) / (d.max - d.min) * 100, text: d.max === 1 ? Math.round(v * 100) + '%' : v >= 100 ? Math.round(v) + 's' : v.toFixed(2), noShare: true };
             }), SERIES.orange, null, 100);
         };
         const hawks = g.hawks.filter(x => !x.leaving), lurkers = g.lurkers;
