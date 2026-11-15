@@ -1,7 +1,8 @@
 // Tunables for world, simulation and genetics. Times are simulation seconds.
 
 export const MAP_SIZE = 40;
-export const MAX_POP = 150;
+// Only a safety net for speed. Crowding, hunger, disease and predators stop growth long before.
+export const MAX_POP = 300;
 export const FOUNDERS = 10;
 export const SIM_STEP = 1 / 30;
 export const YEAR_LENGTH = 160;
@@ -71,7 +72,7 @@ export const GENES = {
     sight: { label: 'Sight', min: 3, max: 10, effect: 'Finds food and partners further away and spots hawks early. Costs a little energy.' },
     prefTemp: { label: 'Heat liking', min: 0, max: 100, effect: 'The temperature this Nome feels best at. Heat lovers grow big ears.' },
     prefMoisture: { label: 'Wet liking', min: 0, max: 100, effect: 'The moisture this Nome feels best at.' },
-    sociability: { label: 'Sociability', min: 0, max: 1, effect: 'Social Nomes huddle for warmth and watch out for hawks together. Loners hate crowds.' },
+    sociability: { label: 'Sociability', min: 0, max: 1, effect: 'Social Nomes huddle for warmth, watch out for hawks together and stand crowds better. Loners get stressed in crowds.' },
     lifespan: { label: 'Lifespan', min: 90, max: 220, effect: 'Lives longer and breeds more often. Costs energy every second.' },
     metabolism: { label: 'Metabolism', min: 0, max: 1, effect: 'Fast: grows up and heals quickly. Slow: lives longer on less food.' },
     fur: { label: 'Fur', min: 0, max: 1, effect: 'Warm in cold and snow. Hot in summer, and wet fur in rain stops warming.' },

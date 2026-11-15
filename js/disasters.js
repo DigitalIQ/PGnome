@@ -300,7 +300,8 @@ export class Disasters {
         for (const c of list) {
             if (c === first || (Math.hypot(c.x - first.x, c.z - first.z) < 1.6 && n < 3)) { this.infect(c); n++; }
         }
-        g.log(`A plague breaks out near ${first.name}. It spreads where Nomes crowd together. Immune Nomes shrug it off.`, 'death');
+        g.log(opts.natural ? `Crowding breeds disease. A plague breaks out near ${first.name}.`
+            : `A plague breaks out near ${first.name}. It spreads where Nomes crowd together. Immune Nomes shrug it off.`, 'death');
         return true;
     }
 
@@ -318,7 +319,8 @@ export class Disasters {
                 if (o.plague > 0 || o.immuneT > 0) continue;
                 const d = Math.abs(o.x - s.x) + Math.abs(o.z - s.z);
                 if (d > 1.6) continue;
-                if (Math.random() < 0.07 * step * (1 - o.genes.immunity * 0.9)) this.infect(o);
+                // Stress weakens the immune system.
+                if (Math.random() < 0.07 * step * (1 - o.genes.immunity * 0.9) * (1 + o.stress)) this.infect(o);
             }
         }
     }

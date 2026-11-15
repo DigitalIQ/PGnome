@@ -132,6 +132,8 @@ export class Creature {
         this.courtNeed = 2;
         this.avoid = new Map();
         this.lastHarm = null;
+        // Crowding stress, 0 = relaxed. It builds up where too many Nomes live close together.
+        this.stress = opts.stress ?? 0;
 
         this.action = 'idle';
         this.status = 'Looking around';
@@ -184,7 +186,7 @@ export class Creature {
 
     get ready() {
         return this.adult && !this.dead && this.cooldown <= 0 && this.energy > this.t.maxEnergy * 0.6 && this.health > 50
-            && this.age < this.t.lifespan * 0.9 && this.poison < 0.3 && this.plague <= 0 && this.action !== 'care';
+            && this.age < this.t.lifespan * 0.9 && this.poison < 0.3 && this.plague <= 0 && this.action !== 'care' && this.stress < 1;
     }
 
     // How absorbed this Nome is in what it does. Absorbed Nomes notice predators late.
@@ -295,6 +297,11 @@ export class Creature {
         burn += game.weatherBurn * (shelter ? 0.4 : 1) * (1 - g.tail * 0.3) * (1.15 - 0.15 * g.size);
         if (this.moving) burn += 0.2 * g.speed * g.speed * (1 + g.plump * 0.3) + g.curiosity * 0.08;
         if (this.action === 'work') burn += 0.3;
+        // Stress costs energy and wears the body out faster.
+        if (this.stress > 0.05) {
+            burn += this.stress * 0.22;
+            this.age += this.stress * 0.35 * dt;
+        }
         if (this.plague > 0) burn += 0.35 * (1 - g.immunity * 0.85);
         if (!this.adult) burn *= 0.7;
         if (this.action === 'rest') {
@@ -329,7 +336,7 @@ export class Creature {
         if (this.fleeTimer > 0) this.fleeTimer -= dt;
 
         const hungerPenalty = this.energy < 30 ? 30 - this.energy : 0;
-        this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - (this.crowded ? 10 : 0) + (w.mood || 0), 0, 100);
+        this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - this.stress * 25 + (w.mood || 0), 0, 100);
 
         if (this.health <= 0) {
             const cause = tile.fire > 0 ? 'burned in a wildfire' : this.energy <= 0 ? 'starved' : inWater && drown > 0.2 ? 'drowned'
@@ -398,7 +405,10 @@ export class Creature {
         this.huddle = huddle;
         this.sharing = sharing;
         this.lonely = g.sociability > 0.6 && near === 0;
-        this.crowded = g.sociability < 0.3 && near > 4;
+        // How many neighbours a Nome can stand depends on its sociability.
+        const tolerance = 8 + g.sociability * 14;
+        this.stress += (clamp((near - tolerance) / 15, 0, 1.5) - this.stress) * 0.15;
+        this.crowded = this.stress > 0.3;
 
         // Forget poison spots after a while.
         if (this.avoid.size) for (const [i, until] of this.avoid) if (until < game.time) this.avoid.delete(i);
@@ -424,10 +434,9 @@ export class Creature {
         }
 
         const hungry = this.energy < t.maxEnergy * 0.55;
-        // Nomes breed less when food per head runs short or the island is crowded,
+        // Nomes breed less when food per head runs short or when they are stressed by crowds,
         // so booms flatten before the winter hits.
-        const crowd = game.creatures.length / MAX_POP;
-        const chance = clamp(game.foodPerNome / 2.5, 0.08, 1) * (1 - crowd * crowd * 0.85);
+        const chance = clamp(game.foodPerNome / 2.5, 0.08, 1) * (1 - Math.min(0.9, this.stress * 0.7));
         if (!hungry && this.ready && game.creatures.length < MAX_POP && Math.random() < chance) {
             const p = game.findPartner(this);
             if (p) {
@@ -487,6 +496,9 @@ export class Creature {
         const winterish = game.seasonIndex >= 2 ? 0.08 : 0;
         const urge = (g.builder * 0.3 + g.claws * (0.12 + winterish + (game.hawks.length ? 0.06 : 0))) * (this.energy > t.maxEnergy * 0.6 ? 1 : 0.15);
         if (this.adult && Math.random() < urge && this.planWork(start)) return;
+
+        // Stressed Nomes leave the crowd. Curious ones and swimmers go furthest.
+        if (this.stress > 0.45 && Math.random() < 0.35 + g.curiosity * 0.4 && this.leaveCrowd(start)) return;
 
         // Curious Nomes look further and like far places.
         const visited = world.bfs(start, 4 + Math.round(g.curiosity * 6), swim);
@@ -574,6 +586,27 @@ export class Creature {
         this.moving = true;
     }
 
+    // Walks to a quieter place further away.
+    leaveCrowd(start) {
+        const world = this.game.world, swim = this.t.swimmer;
+        const visited = Array.from(world.bfs(start, 7 + Math.round(this.genes.curiosity * 7), swim));
+        let best = null, bestS = Infinity;
+        for (let k = 0; k < 10 && visited.length; k++) {
+            const i = visited[Math.floor(Math.random() * visited.length)];
+            const tl = world.tiles[i];
+            if (!isWalkable(tl) || tl.fire > 0 || world.heat[i] > 0.2) continue;
+            let n = 0;
+            for (const o of this.game.creatures) if (Math.abs(o.x - tl.x) < 3 && Math.abs(o.z - tl.z) < 3) n++;
+            const s = n - world.bfsDist[i] * 0.05 - this.tileValue(tl) * 2;
+            if (s < bestS) { bestS = s; best = tl; }
+        }
+        if (!best) return false;
+        world.bfs(start, 15, swim);
+        if (!world.reached(best.i)) return false;
+        this.walkTo(world.pathTo(best.i), 'wander', 'Leaving the crowd');
+        return true;
+    }
+
     // Food this Nome could eat on a tile, as a rough energy value. Wary Nomes see warning colors.
     tileValue(tl) {
         if (this.avoid.has(tl.i)) return 0;
@@ -652,6 +685,13 @@ export class Creature {
         else if (kind === 'greens' || kind === 'seaweed') tile.food -= got;
         else tile[kind] -= got;
         this.energy += got * FOODS[kind].energy;
+        // Crowded, stressed Nomes fight over food. Horns win, loners start fights more often.
+        if (this.sharing > 0 && this.stress > 0.35 && Math.random() < this.stress * 0.08 * (1.2 - g.sociability * 0.7)) {
+            this.health -= 4 + Math.random() * 12 * (1 - g.horns * 0.6) * (1.2 - g.size * 0.3);
+            this.lastHarm = 'was hurt in a fight';
+            this.status = 'Fighting over food';
+            game.stats.fights = (game.stats.fights || 0) + 1;
+        }
         game.stats.food[kind] = (game.stats.food[kind] || 0) + got;
         if (kind === 'fruit') this.seeds = Math.min(1, this.seeds + got * 2);
         if (kind === 'greens' || kind === 'fruit' || kind === 'shroom') game.world.grazed(tile, got);
@@ -942,7 +982,7 @@ export class Creature {
             id: this.id, name: this.name, x: r(this.x), z: r(this.z), genes,
             generation: this.generation, parents: this.parents, age: r(this.age),
             energy: r(this.energy), health: r(this.health), cooldown: r(this.cooldown), children: this.children,
-            poison: r(this.poison), plague: r(this.plague), immuneT: r(this.immuneT)
+            poison: r(this.poison), plague: r(this.plague), immuneT: r(this.immuneT), stress: r(this.stress)
         };
     }
 }

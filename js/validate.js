@@ -64,7 +64,7 @@ function cleanStats(s) {
         food: sub(food, ['plants', 'greens', 'fruit', 'nuts', 'shroom', 'roots', 'seaweed', 'nectar', 'fed']),
         poison: sub(s.poison, ['cases', 'spat']), plague: sub(s.plague, ['cases']),
         work: sub(s.work, ['burrows', 'dams', 'planted', 'drained']),
-        landMade: int(s.landMade, 0, 1e9),
+        landMade: int(s.landMade, 0, 1e9), fights: int(s.fights, 0, 1e9),
         disasters: Array.isArray(s.disasters) ? s.disasters.slice(-60).filter(e => isObj(e) && DISASTERS[e.kind]).map(e => ({
             y: int(e.y, 1, 1e6, 1), kind: e.kind, before: int(e.before, 0, MAX_POP), after: e.after == null ? null : int(e.after, 0, MAX_POP)
         })) : [],
@@ -95,7 +95,7 @@ export function cleanSave(d) {
         parents: Array.isArray(c.parents) && c.parents.length === 2 && c.parents.every(p => NAME.test(p || '')) ? [c.parents[0], c.parents[1]] : null,
         age: num(c.age, 0, 1e5), energy: num(c.energy, 0, 200, 70), health: num(c.health, 0, 100, 100),
         cooldown: num(c.cooldown, -1e5, 1e5, 8), children: int(c.children, 0, 1e6),
-        poison: num(c.poison, 0, 3, 0), plague: num(c.plague, 0, 60, 0), immuneT: num(c.immuneT, 0, 1e4, 0)
+        poison: num(c.poison, 0, 3, 0), plague: num(c.plague, 0, 60, 0), immuneT: num(c.immuneT, 0, 1e4, 0), stress: num(c.stress, 0, 1.5, 0)
     }));
     if (!creatures.length) return null;
     const goals = {};
@@ -107,7 +107,7 @@ export function cleanSave(d) {
         t: num(h.t, 0, 1e9), pop: int(h.pop, 0, MAX_POP), land: int(h.land, 0, 4096), hawks: int(h.hawks, 0, 20),
         sat: int(h.sat, 0, MAX_POP), water: int(h.water, 0, MAX_POP),
         g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : [],
-        lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096),
+        lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096), stress: num(h.stress, 0, 1.5, 0),
         hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null,
         lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 3, 0)) : null
     })) : [];

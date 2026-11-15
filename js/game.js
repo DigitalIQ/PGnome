@@ -330,12 +330,14 @@ export class Game {
         const picky = (a.genes.pickiness + b.genes.pickiness) / 2;
         const fed = a.energy > a.maxEnergy * 0.75 && b.energy > b.maxEnergy * 0.75;
         const care = (a.genes.care + b.genes.care) / 2;
+        // Stressed parents raise weaker young.
+        const stress = Math.min(1, (a.stress + b.stress) / 2);
         const count = fed && Math.random() < litter * 0.6 && this.creatures.length < MAX_POP - 1 ? 2 : 1;
         let child = null;
         for (let k = 0; k < count; k++) {
             const genes = mixGenes(a.genes, b.genes, this.mutationRate);
             child = new Creature(this, (a.x + b.x) / 2 + k * 0.2, (a.z + b.z) / 2, genes, {
-                generation: gen, parents: [a.name, b.name], energy: 45 - (count - 1) * 12 + picky * 20 + care * 22, cooldown: 0, y: a.y
+                generation: gen, parents: [a.name, b.name], energy: 45 - (count - 1) * 12 + picky * 20 + care * 22 - stress * 15, cooldown: 0, y: a.y
             });
             this.creatures.push(child);
         }
@@ -373,10 +375,7 @@ export class Game {
             this.stats.maxGen = gen;
             if (gen > 2) this.log(`${child.name} starts generation ${gen}.`, 'birth');
         }
-        if (this.creatures.length >= MAX_POP && !this.capWarned) {
-            this.capWarned = true;
-            this.log(`The island is full at ${MAX_POP} Nomes. Births pause until there is room.`, 'world');
-        }
+
     }
 
     kill(c, cause) {
@@ -460,7 +459,8 @@ export class Game {
             const c = this.creatures[i];
             if (c) c.step(dt);
         }
-        if (this.creatures.length < MAX_POP - 10) this.capWarned = false;
+        this.crowdTimer = (this.crowdTimer || 0) + dt;
+        if (this.crowdTimer >= 10) { this.crowdTimer = 0; this.checkCrowding(); }
         if (this.creatures.length > this.stats.peakPop) this.stats.peakPop = this.creatures.length;
         if (this.creatures.length > (this.runPeak || 0)) this.runPeak = this.creatures.length;
 
@@ -526,6 +526,7 @@ export class Game {
             t: Math.round(this.time), pop: n, land: this.world.stats().land,
             hawks: this.hawks.filter(h => !h.leaving && !h.away).length, sat: where.satellite, water: where.water, g,
             lurkers: this.lurkers.length, tox: r3(tox / Math.max(1, toxN)), burrows,
+            stress: n ? r3(this.creatures.reduce((a, c) => a + c.stress, 0) / n) : 0,
             hg: avg(active, HAWK_GENES), lg: avg(this.lurkers, LURKER_GENES)
         });
         if (this.longHistory.length > 1000) this.longHistory.shift();
@@ -606,8 +607,9 @@ export class Game {
     // die. A few newcomers arrive when there is prey, so hunters never vanish for good.
     stepPredators(dt) {
         const n = this.creatures.length, c = this.world.center;
-        const hawkCap = this.hawksOn && n >= 12 ? Math.min(7, 1 + Math.floor((n - 12) / 18)) : 0;
-        const lurkCap = this.hawksOn && n >= 20 ? Math.min(5, Math.floor(n / 28)) : 0;
+        // Plenty of prey feeds more hunters.
+        const hawkCap = this.hawksOn && n >= 12 ? Math.min(10, 1 + Math.floor((n - 12) / 16)) : 0;
+        const lurkCap = this.hawksOn && n >= 20 ? Math.min(8, Math.floor(n / 25)) : 0;
         this.hawkTimer -= dt;
         if (this.hawkTimer <= 0) {
             this.hawkTimer = 10;
@@ -666,6 +668,25 @@ export class Game {
                 this.lurkers.splice(i, 1);
                 this.stats.lurker.died++;
             }
+        }
+    }
+
+    // Crowding has consequences: stress, fights and, where it gets bad, disease.
+    checkCrowding() {
+        const list = this.creatures, n = list.length;
+        if (!n) return;
+        let sum = 0, worst = null;
+        for (const c of list) { sum += c.stress; if (!worst || c.stress > worst.stress) worst = c; }
+        const mean = sum / n;
+        this.meanStress = mean;
+        if (mean > 0.25 && !this.crowdWarned) {
+            this.crowdWarned = true;
+            this.log('The island is getting crowded. Stressed Nomes fight, breed less, age faster and catch diseases.', 'world');
+        }
+        if (mean < 0.1) this.crowdWarned = false;
+        const sick = list.some(c => c.plague > 0);
+        if (!sick && worst.stress > 0.6 && Math.random() < mean * 0.5) {
+            this.disasters.plague({ creature: worst, natural: true });
         }
     }
 

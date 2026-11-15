@@ -120,6 +120,7 @@ export class StatsView {
             tile('caught by predators', fmt(s.hawk.catches + s.lurker.catches), `${fmt(s.hawk.catches)} hawks, ${fmt(s.lurker.catches)} lurkers`),
             tile('poisoned', fmt(s.poison.cases), `${fmt(s.poison.spat)} times spat out`),
             tile('disasters', fmt(s.disasters.length)),
+            tile('crowding stress', Math.round((g.meanStress || 0) * 100) + '%', `${fmt(s.fights || 0)} fights over food`),
             tile('lightning strikes', fmt(s.strikes), s.burned ? `${fmt(s.burned)} forests burned` : ''),
             tile('goals reached', `${Object.keys(g.goals).length}`),
             tile('score this run', fmt(run)),
@@ -143,6 +144,7 @@ export class StatsView {
         this.addChart('Land tiles', h.map(p => [p.t, p.land]), SERIES.blue);
         this.addChart('Hawks hunting', h.map(p => [p.t, p.hawks ?? 0]), SERIES.orange);
         this.addChart('Lurkers', h.map(p => [p.t, p.lurkers ?? 0]), SERIES.yellow);
+        this.addChart('Crowding stress (%)', h.map(p => [p.t, Math.round((p.stress ?? 0) * 100)]), SERIES.red);
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
         const whereBars = bars([
