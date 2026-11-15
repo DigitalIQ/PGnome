@@ -378,7 +378,9 @@ export class World {
         if (this.evolveAcc < 0.5) return null;
         const step = this.evolveAcc;
         this.evolveAcc = 0;
-        const sea = this.seaLevel(time);
+        // A downpour floods the coast for a while.
+        this.flood = (this.flood || 0) + ((weather.flood || 0) - (this.flood || 0)) * Math.min(1, step * 0.05);
+        const sea = this.seaLevel(time) + this.flood * 0.025;
         this.seaNow = sea;
         const hot = this.hotspot(time);
         const s = this.size, n = s * s;
@@ -502,7 +504,14 @@ export class World {
 
     // Breadth-first search over walkable tiles. The start tile may be water,
     // so a Nome dropped into a lake can still find the shore.
-    bfs(start, maxDepth) {
+    // Swimmers may cross shallow water. Deep water stops everyone.
+    passable(t, swim = false) {
+        if (!t) return false;
+        if (BIOMES[t.biome].walkable) return true;
+        return swim && t.height >= 0.12;
+    }
+
+    bfs(start, maxDepth, swim = false) {
         const gen = ++this.bfsGen;
         const q = this.bfsQueue;
         let head = 0, tail = 0;
@@ -522,9 +531,9 @@ export class World {
                 if (nx < 0 || nz < 0 || nx >= s || nz >= s) continue;
                 const ni = nz * s + nx;
                 if (this.bfsStamp[ni] === gen) continue;
-                if (!BIOMES[this.tiles[ni].biome].walkable) continue;
+                if (!this.passable(this.tiles[ni], swim)) continue;
                 if (dx !== 0 && dz !== 0) {
-                    if (!BIOMES[this.tiles[z * s + nx].biome].walkable || !BIOMES[this.tiles[nz * s + x].biome].walkable) continue;
+                    if (!this.passable(this.tiles[z * s + nx], swim) || !this.passable(this.tiles[nz * s + x], swim)) continue;
                 }
                 this.bfsStamp[ni] = gen;
                 this.bfsDist[ni] = d + 1;

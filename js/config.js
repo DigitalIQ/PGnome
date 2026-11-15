@@ -25,24 +25,33 @@ export const BIOMES = [
 
 export const SEASONS = ['Spring', 'Summer', 'Autumn', 'Winter'];
 
+// Every gene has a benefit and a cost. How much each matters depends on season, weather,
+// time of day and terrain, so no single value is best everywhere.
 export const GENES = {
-    hue: { label: 'Color', min: 0, max: 360, wrap: true },
-    size: { label: 'Size', min: 0.6, max: 1.6 },
-    speed: { label: 'Speed', min: 0.6, max: 2.4 },
-    sight: { label: 'Sight', min: 3, max: 10 },
-    prefTemp: { label: 'Heat liking', min: 0, max: 100 },
-    prefMoisture: { label: 'Wet liking', min: 0, max: 100 },
-    sociability: { label: 'Sociability', min: 0, max: 1 },
-    lifespan: { label: 'Lifespan', min: 90, max: 220 },
-    // Body plan genes. Legs change how a Nome walks, the rest is looks only and drifts freely.
-    legs: { label: 'Legs', min: 0, max: 1, body: true },
-    bodyLen: { label: 'Body length', min: 0.75, max: 1.6, body: true },
-    plump: { label: 'Plumpness', min: 0, max: 1, body: true },
-    eyes: { label: 'Eyes', min: 0, max: 1, body: true },
-    horns: { label: 'Horns', min: 0, max: 1, body: true },
-    tail: { label: 'Tail', min: 0, max: 1, body: true },
-    pattern: { label: 'Pattern', min: 0, max: 1, body: true },
-    hue2: { label: 'Accent color', min: 0, max: 360, wrap: true, body: true }
+    hue: { label: 'Color', min: 0, max: 360, wrap: true, effect: 'Picky Nomes only pair with similar colors. Over time this can split a population.' },
+    size: { label: 'Size', min: 0.6, max: 1.6, effect: 'Keeps warm and resists wind. Needs much more food.' },
+    speed: { label: 'Speed', min: 0.6, max: 2.4, effect: 'Reaches food first. Burns energy fast while moving.' },
+    sight: { label: 'Sight', min: 3, max: 10, effect: 'Finds food and partners further away. Costs a little energy.' },
+    prefTemp: { label: 'Heat liking', min: 0, max: 100, effect: 'The temperature this Nome feels best at. Heat lovers grow big ears.' },
+    prefMoisture: { label: 'Wet liking', min: 0, max: 100, effect: 'The moisture this Nome feels best at.' },
+    sociability: { label: 'Sociability', min: 0, max: 1, effect: 'Social Nomes huddle for warmth in the cold but get lonely alone. Loners hate crowds.' },
+    lifespan: { label: 'Lifespan', min: 90, max: 220, effect: 'Lives longer and breeds more often. Costs energy every second.' },
+    metabolism: { label: 'Metabolism', min: 0, max: 1, effect: 'Fast: grows up and heals quickly. Slow: lives longer on less food.' },
+    fur: { label: 'Fur', min: 0, max: 1, effect: 'Warm in cold and snow. Hot in summer, and wet fur in rain stops warming.' },
+    pigment: { label: 'Skin tone', min: 0, max: 1, effect: 'Dark skin soaks up sunshine, light skin reflects it. Matters only in daylight.' },
+    nocturnal: { label: 'Night life', min: 0, max: 1, effect: 'Night Nomes see in the dark and sleep by day. Day Nomes go blind at night.' },
+    webbing: { label: 'Webbed feet', min: 0, max: 1, effect: 'Swims through shallow water and drowns slower. A little slower on land.' },
+    curiosity: { label: 'Curiosity', min: 0, max: 1, effect: 'Roams far and finds new land. Wastes energy walking.' },
+    litter: { label: 'Twins', min: 0, max: 1, effect: 'Chance of twins. Each birth costs the parents more, children start weaker.' },
+    pickiness: { label: 'Pickiness', min: 0, max: 1, effect: 'Only pairs with similar colors, but raises stronger children.' },
+    legs: { label: 'Legs', min: 0, max: 1, body: true, effect: 'More legs grip on marsh and rock but are slower on flat ground and cost energy.' },
+    bodyLen: { label: 'Body length', min: 0.75, max: 1.6, body: true, effect: 'A long body stores more food. It costs more to carry.' },
+    plump: { label: 'Plumpness', min: 0, max: 1, body: true, effect: 'Fat keeps warm and helps survive hunger. Slow and hot in summer.' },
+    eyes: { label: 'Eyes', min: 0, max: 1, body: true, effect: 'Three eyes see through fog and dark. One eye is cheap but nearly blind in fog.' },
+    horns: { label: 'Horns', min: 0, max: 1, body: true, effect: 'Horned Nomes win food fights and attract partners. Lightning likes them.' },
+    tail: { label: 'Tail', min: 0, max: 1, body: true, effect: 'Balances in storms, steers when swimming and sheds a little heat.' },
+    pattern: { label: 'Pattern', min: 0, max: 1, body: true, effect: 'Spots and stripes attract partners. Making them costs a little energy.' },
+    hue2: { label: 'Accent color', min: 0, max: 360, wrap: true, body: true, effect: 'Color of spots, stripes and crest. Pure looks.' }
 };
 
 export const legCount = v => (v < 0.3 ? 2 : v < 0.78 ? 4 : 6);
@@ -50,23 +59,37 @@ export const eyeCount = v => (v < 0.12 ? 1 : v > 0.9 ? 3 : 2);
 export const patternName = v => (v < 0.4 ? 'plain' : v < 0.7 ? 'spotted' : 'striped');
 
 // Weather. temp shifts the air temperature, wet the moisture, growth multiplies plant growth.
+// The other fields drive effects and visuals: rain, snow, hail and dust are particle amounts,
+// cloud is the sky cover, flood raises the sea on living islands, mood lifts spirits.
 export const WEATHER = {
-    clear: { name: 'Clear', temp: 1, wet: -4, growth: 1.0, sight: 1, burn: 0, light: 1, fog: 0 },
-    cloudy: { name: 'Cloudy', temp: -2, wet: 3, growth: 0.9, sight: 1, burn: 0, light: 0.75, fog: 0.1 },
-    rain: { name: 'Rain', temp: -3, wet: 18, growth: 1.6, sight: 0.85, burn: 0.05, light: 0.6, fog: 0.2, rain: 1 },
-    storm: { name: 'Storm', temp: -4, wet: 25, growth: 1.25, sight: 0.7, burn: 0.25, light: 0.4, fog: 0.3, rain: 1.8, wind: 1 },
-    fog: { name: 'Fog', temp: -1, wet: 8, growth: 1.0, sight: 0.55, burn: 0, light: 0.7, fog: 1 },
-    heat: { name: 'Heat wave', temp: 13, wet: -28, growth: 0.35, sight: 1, burn: 0.12, light: 1.15, fog: 0 },
-    snow: { name: 'Snowfall', temp: -5, wet: 6, growth: 0.6, sight: 0.8, burn: 0.06, light: 0.7, fog: 0.25, snow: 1 }
+    clear: { name: 'Clear', temp: 1, wet: -4, growth: 1.0, sight: 1, burn: 0, light: 1, fog: 0, cloud: 0.12 },
+    cloudy: { name: 'Cloudy', temp: -2, wet: 3, growth: 0.9, sight: 1, burn: 0, light: 0.75, fog: 0.1, cloud: 0.8 },
+    windy: { name: 'Windy', temp: -2, wet: -6, growth: 0.95, sight: 0.95, burn: 0.08, light: 0.9, fog: 0, cloud: 0.4, wind: 0.7, leaves: 1 },
+    drizzle: { name: 'Drizzle', temp: -2, wet: 10, growth: 1.25, sight: 0.9, burn: 0, light: 0.7, fog: 0.15, cloud: 0.7, rain: 0.4 },
+    rain: { name: 'Rain', temp: -3, wet: 18, growth: 1.6, sight: 0.85, burn: 0.05, light: 0.6, fog: 0.2, cloud: 0.9, rain: 1 },
+    downpour: { name: 'Downpour', temp: -4, wet: 32, growth: 1.4, sight: 0.6, burn: 0.12, light: 0.4, fog: 0.4, cloud: 1, rain: 2.6, flood: 1 },
+    storm: { name: 'Thunderstorm', temp: -4, wet: 25, growth: 1.25, sight: 0.7, burn: 0.25, light: 0.4, fog: 0.3, cloud: 1, rain: 1.8, wind: 1, lightning: 1 },
+    hail: { name: 'Hail', temp: -6, wet: 8, growth: 0.6, sight: 0.8, burn: 0.1, light: 0.55, fog: 0.15, cloud: 0.9, hail: 1 },
+    fog: { name: 'Fog', temp: -1, wet: 8, growth: 1.0, sight: 0.55, burn: 0, light: 0.7, fog: 1, cloud: 0.2 },
+    heat: { name: 'Heat wave', temp: 13, wet: -28, growth: 0.35, sight: 1, burn: 0.12, light: 1.15, fog: 0.25, cloud: 0, haze: 1 },
+    sandstorm: { name: 'Sandstorm', temp: 6, wet: -22, growth: 0.5, sight: 0.4, burn: 0.2, light: 0.65, fog: 0.6, cloud: 0.3, wind: 1, dust: 1 },
+    snow: { name: 'Snowfall', temp: -5, wet: 6, growth: 0.6, sight: 0.8, burn: 0.06, light: 0.7, fog: 0.25, cloud: 0.8, snow: 1 },
+    blizzard: { name: 'Blizzard', temp: -10, wet: 8, growth: 0.4, sight: 0.4, burn: 0.25, light: 0.45, fog: 0.6, cloud: 1, snow: 2, wind: 1 },
+    frost: { name: 'Frost', temp: -7, wet: -2, growth: 0.5, sight: 1, burn: 0.05, light: 1, fog: 0.05, cloud: 0.05, frost: 1 },
+    rainbow: { name: 'Rainbow', temp: 0, wet: 8, growth: 1.15, sight: 1, burn: 0, light: 0.95, fog: 0, cloud: 0.4, rainbow: 1, mood: 12 },
+    aurora: { name: 'Northern lights', temp: -4, wet: 0, growth: 0.8, sight: 1, burn: 0, light: 0.9, fog: 0, cloud: 0.05, aurora: 1, mood: 12 }
 };
 
 // How likely each weather is per season (spring, summer, autumn, winter).
+// A rainbow can only follow rain, so it is not listed here.
 export const WEATHER_ODDS = [
-    { clear: 3, cloudy: 2, rain: 3, storm: 0.8, fog: 1.4 },
-    { clear: 4, cloudy: 1, rain: 1.2, storm: 1, heat: 2.2 },
-    { clear: 2, cloudy: 2.5, rain: 3, storm: 1.5, fog: 2.4 },
-    { clear: 2, cloudy: 2.5, snow: 3.5, storm: 0.7, fog: 1.4 }
+    { clear: 3, cloudy: 2, windy: 1, drizzle: 2, rain: 2.5, downpour: 0.6, storm: 0.7, hail: 0.6, fog: 1.2, frost: 0.5 },
+    { clear: 4, cloudy: 1, windy: 0.8, drizzle: 0.8, rain: 1, downpour: 0.6, storm: 1.1, heat: 2, sandstorm: 0.8, hail: 0.4 },
+    { clear: 2, cloudy: 2.5, windy: 2, drizzle: 2, rain: 2.5, downpour: 1, storm: 1.4, fog: 2.2, frost: 0.8 },
+    { clear: 2, cloudy: 2.3, windy: 0.8, snow: 3, blizzard: 1, frost: 1.8, fog: 1.2, storm: 0.5, aurora: 1 }
 ];
+
+export const DAY_LENGTH = 32;
 
 export const MODES = {
     classic: { name: 'Classic island', bonus: 1 },
@@ -82,5 +105,7 @@ export const GOALS = [
     { id: 'extreme', label: 'Breed a heat liking below 20 or above 80' },
     { id: 'gen10', label: 'Reach generation 12' },
     { id: 'sixlegs', label: 'Evolve a six-legged Nome' },
+    { id: 'swimmer', label: 'Evolve a swimmer (webbed feet over 70%)' },
+    { id: 'night', label: 'Evolve a night walker (night life over 70%)' },
     { id: 'pop100', label: 'Grow to 100 Nomes at once' }
 ];

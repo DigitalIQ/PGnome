@@ -4,6 +4,7 @@ import { Game } from './game.js';
 import { UI } from './ui.js';
 import { setupInput } from './input.js';
 import { Sky } from './sky.js';
+import { setNightGlow } from './body.js';
 import { SIM_STEP } from './config.js';
 import { randomSeed, clamp } from './rng.js';
 
@@ -60,6 +61,8 @@ let snowCover = 0;
 
 const summerSun = new THREE.Color(0xffe6bf), winterSun = new THREE.Color(0xdde7ff);
 const summerSky = new THREE.Color(0xe4eef5), winterSky = new THREE.Color(0xc9d6e6);
+const duskSun = new THREE.Color(0xff9a52), moonLight = new THREE.Color(0x9fb4ff), nightSky = new THREE.Color(0x4a5a80);
+const hazeTint = new THREE.Color(0xf0b070), nightSea = new THREE.Color(0x0e1a2a);
 
 function frameCamera() {
     const c = game.world.center;
@@ -76,22 +79,45 @@ function applyEnvironment(dt) {
     if (!game.world) return;
     const w = game.weather.now;
     const t = game.airTemp;
-    // Snow cover builds up while it snows and melts slowly.
-    let target = clamp((-t - 9) / 12, 0, 1) * 0.72;
-    if (t < 2) target = Math.max(target, (w.snow || 0) * 0.6);
+    // Snow cover builds up while it snows and melts slowly. Frost leaves a thin white layer.
+    let target = clamp((-game.seasonTemp - w.temp - 9) / 12, 0, 1) * 0.72;
+    if (t < 2) target = Math.max(target, (w.snow || 0) * 0.45);
+    target = Math.max(target, (w.frost || 0) * 0.32, (w.hail || 0) * 0.2);
     snowCover += (target - snowCover) * Math.min(1, dt * 0.35);
     const ice = clamp((-t - 14) / 10, 0, 1) * 0.35;
     game.world.applySeason(snowCover, ice);
+
+    // Sun by day, moon by night. The light swings across the sky, so shadows move.
+    const c = game.world.center;
+    const a = game.dayPhase * Math.PI * 2;
+    const h = game.sunHeight;
+    const night = game.night;
+    const day = h > 0;
+    const sx = Math.sin(a) * 26;
+    if (day) sun.position.set(c + sx, h * 30 + 4, c + 8);
+    else sun.position.set(c - sx, -h * 30 + 4, c - 8);
+    sun.target.position.set(c, 0, c);
+
     const warm = clamp((game.seasonTemp + 24) / 42, 0, 1);
     game.flash = Math.max(0, (game.flash || 0) - dt * 3.5);
     const flash = game.flash > 0.5 || (game.flash > 0.2 && game.flash < 0.35) ? game.flash : 0;
-    sun.color.copy(winterSun).lerp(summerSun, warm);
-    sun.intensity = (1.9 + warm * 0.6) * w.light + flash * 2;
-    hemi.color.copy(winterSky).lerp(summerSky, warm);
-    hemi.intensity = 1.2 * (0.55 + 0.45 * w.light) + flash * 3;
+    if (day) {
+        sun.color.copy(winterSun).lerp(summerSun, warm).lerp(duskSun, clamp(1 - h / 0.35, 0, 1) * 0.8);
+        if ((w.haze || 0) > 0) sun.color.lerp(hazeTint, w.haze * 0.35);
+        sun.intensity = (1.9 + warm * 0.6) * w.light * clamp(h / 0.25, 0.15, 1) + flash * 2;
+    } else {
+        sun.color.copy(moonLight);
+        sun.intensity = 0.5 * (1 - (w.cloud || 0) * 0.6) * clamp(-h / 0.3, 0.2, 1) + flash * 2.5;
+    }
+    hemi.color.copy(winterSky).lerp(summerSky, warm).lerp(nightSky, night);
+    hemi.intensity = 1.2 * (0.55 + 0.45 * w.light) * (1 - night * 0.62) + flash * 3;
+    setNightGlow(night);
+
     scene.background.copy(game.world.materials[0].color).multiplyScalar(0.55 + 0.45 * Math.min(1, w.light));
-    sky.applyFog(scene, w.fog, scene.background);
-    if (w.fog > 0.3) scene.background.lerp(sky.fogColor, Math.min(1, (w.fog - 0.3) * 1.1));
+    if ((w.haze || 0) > 0) scene.background.lerp(hazeTint, w.haze * 0.15);
+    scene.background.lerp(nightSea, night * 0.75);
+    sky.applyFog(scene, w, scene.background, night);
+    if (w.fog > 0.3) scene.background.lerp(scene.fog.color, Math.min(1, (w.fog - 0.3) * 1.1));
 }
 
 function parseSeed(text) {
@@ -225,7 +251,7 @@ function frame(now) {
         game.world.updatePlants();
     }
     applyEnvironment(dt);
-    sky.update(dt, game.weather.now, controls.target, game.world && !game.paused && !state.overlay);
+    if (game.world) sky.update(dt, game, controls.target, camera, !game.paused && !state.overlay);
     input.update(dt);
     controls.update();
     renderer.render(scene, camera);

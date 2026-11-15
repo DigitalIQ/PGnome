@@ -179,7 +179,7 @@ export function setupInput({ renderer, camera, controls, scene, game, actions, s
             if (c && !c.dead) {
                 ring.visible = true;
                 ring.position.set(c.root.position.x, c.root.position.y + 0.03, c.root.position.z);
-                ring.scale.setScalar(c.genes.size * (0.45 + 0.55 * Math.min(1, c.age / MATURITY_AGE)) * 1.1);
+                ring.scale.setScalar(c.genes.size * (0.45 + 0.55 * Math.min(1, c.age / c.maturity)) * 1.1);
                 ring.rotation.y += dt * 1.5;
                 if (game.follow) {
                     move.set(c.x - controls.target.x, 0, c.z - controls.target.z).multiplyScalar(Math.min(1, dt * 4));

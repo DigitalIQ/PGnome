@@ -1,23 +1,30 @@
 import * as THREE from 'three';
-import { GENES, BIOMES, B, MATURITY_AGE, MAX_POP, legCount } from './config.js';
+import { GENES, BIOMES, B, MATURITY_AGE, MAX_POP, legCount, eyeCount } from './config.js';
 import { rand, clamp, lerp, gauss, randomName } from './rng.js';
 import { isWalkable, WATER_H } from './world.js';
 import { emoteMaterials } from './icons.js';
 import { buildBody, baseColor } from './body.js';
 
 // Fallbacks for genes that older saves do not have yet.
-const BODY_DEFAULTS = { legs: 0.5, bodyLen: 1, plump: 0.5, eyes: 0.5, horns: 0.25, tail: 0.5, pattern: 0.2 };
+const DEFAULTS = {
+    legs: 0.5, bodyLen: 1, plump: 0.5, eyes: 0.5, horns: 0.25, tail: 0.5, pattern: 0.2,
+    metabolism: 0.5, fur: 0.3, pigment: 0.5, nocturnal: 0.15, webbing: 0.15, curiosity: 0.4, litter: 0.2, pickiness: 0.3
+};
 
 let nextId = 1;
 export const setNextId = n => { nextId = Math.max(nextId, n); };
 export const getNextId = () => nextId;
+
+export const hueDist = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
 
 // A species template per island keeps the founders related, so later change is visible.
 export function speciesTemplate(rnd) {
     const r = (a, b) => a + rnd() * (b - a);
     return {
         hue: r(0, 360), hue2: r(0, 360), legs: r(0.32, 0.7), bodyLen: r(0.85, 1.25), plump: r(0.2, 0.8),
-        eyes: r(0.2, 0.8), horns: r(0, 0.6), tail: r(0.1, 0.9), pattern: r(0, 1)
+        eyes: r(0.2, 0.8), horns: r(0, 0.6), tail: r(0.1, 0.9), pattern: r(0, 1),
+        metabolism: r(0.3, 0.7), fur: r(0.1, 0.6), pigment: r(0.2, 0.8), nocturnal: r(0, 0.35),
+        webbing: r(0, 0.4), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5)
     };
 }
 
@@ -26,7 +33,7 @@ export function fillGenes(g, template) {
         if (typeof g[k] === 'number' && !Number.isNaN(g[k])) continue;
         if (k === 'hue2') g[k] = ((g.hue ?? 0) + 140) % 360;
         else if (template && k in template) g[k] = template[k];
-        else if (k in BODY_DEFAULTS) g[k] = BODY_DEFAULTS[k];
+        else if (k in DEFAULTS) g[k] = DEFAULTS[k];
         else g[k] = (def.min + def.max) / 2;
     }
     return g;
@@ -38,6 +45,7 @@ export function randomGenes(climate, template) {
     if (template) {
         for (const [k, v] of Object.entries(template)) {
             const def = GENES[k];
+            if (!def) continue;
             const spread = (def.max - def.min) * (def.wrap ? 0.05 : 0.09);
             const x = v + gauss() * spread;
             g[k] = def.wrap ? ((x % 360) + 360) % 360 : clamp(x, def.min, def.max);
@@ -87,6 +95,7 @@ export class Creature {
         this.z = z;
         this.y = opts.y ?? 0;
         this.genes = fillGenes(genes, game.template);
+        this.computeTraits();
         this.generation = opts.generation || 1;
         this.parents = opts.parents || null;
         this.age = opts.age ?? 0;
@@ -99,6 +108,9 @@ export class Creature {
         this.coldSide = false;
         this.lonely = false;
         this.crowded = false;
+        this.huddle = 0;
+        this.sharing = 0;
+        this.sightNow = this.genes.sight;
 
         this.action = 'idle';
         this.status = 'Looking around';
@@ -122,21 +134,49 @@ export class Creature {
         this.buildMesh();
     }
 
-    get adult() { return this.age >= MATURITY_AGE; }
+    // Values that follow from the genes and never change during a life.
+    computeTraits() {
+        const g = this.genes;
+        const lenN = (g.bodyLen - 0.75) / 0.85;
+        const legs = legCount(g.legs), eyes = eyeCount(g.eyes);
+        this.t = {
+            legs, eyes, lenN,
+            maxEnergy: 85 + lenN * 45,
+            maturity: MATURITY_AGE * (1.3 - 0.6 * g.metabolism),
+            lifespan: g.lifespan * (1.12 - 0.24 * g.metabolism),
+            burnMul: 0.78 + 0.44 * g.metabolism,
+            heal: 0.7 + 0.8 * g.metabolism,
+            swimmer: g.webbing > 0.55,
+            fogEye: eyes === 1 ? 1.35 : eyes === 3 ? 0.45 : 1,
+            nightEye: eyes === 3 ? 1.15 : 1,
+            attract: (g.pattern >= 0.4 ? 0.5 : 0) + Math.max(0, g.horns - 0.5) * 1.4 + Math.max(0, lenN - 0.6) * 0.3,
+            baseBurn: 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015
+                + (legs - 2) / 2 * 0.05 + (eyes - 2) * 0.03 + Math.max(0, g.horns - 0.5) * 0.2 + lenN * 0.12
+                + (g.pattern >= 0.4 ? 0.03 : 0) + g.fur * 0.04
+        };
+    }
+
+    get maturity() { return this.t.maturity; }
+    get maxEnergy() { return this.t.maxEnergy; }
+    get adult() { return this.age >= this.t.maturity; }
 
     get ready() {
-        return this.adult && !this.dead && this.cooldown <= 0 && this.energy > 60 && this.health > 50
-            && this.age < this.genes.lifespan * 0.9;
+        return this.adult && !this.dead && this.cooldown <= 0 && this.energy > this.t.maxEnergy * 0.6 && this.health > 50
+            && this.age < this.t.lifespan * 0.9;
     }
 
     get lifeStage() {
         if (!this.adult) return 'Child';
-        if (this.age > this.genes.lifespan * 0.8) return 'Elder';
+        if (this.age > this.t.lifespan * 0.8) return 'Elder';
         return 'Adult';
     }
 
     get color() {
         return baseColor(this.genes);
+    }
+
+    accepts(o) {
+        return hueDist(this.genes.hue, o.genes.hue) <= 30 + 150 * (1 - this.genes.pickiness);
     }
 
     buildMesh() {
@@ -166,50 +206,77 @@ export class Creature {
 
     // ---------- Simulation ----------
 
+    // How far this Nome sees right now: fog, darkness and its eyes all count.
+    sightFactor() {
+        const game = this.game, g = this.genes, t = this.t;
+        const fog = clamp(1 - (1 - game.sightMul) * t.fogEye, 0.25, 1.1);
+        const night = game.night;
+        const dark = (1 - night) * (1 - 0.2 * g.nocturnal) + night * (0.5 + 0.55 * g.nocturnal) * t.nightEye;
+        return fog * dark;
+    }
+
+    // Forests shelter from storms and hail, rocks from hail.
+    sheltered(tile) {
+        return !!tile && (tile.biome === B.FOREST || (tile.biome === B.ROCK && this.game.weather.now.hail > 0.3));
+    }
+
     step(dt) {
         if (this.dead || this.dragged) return;
-        const game = this.game, world = game.world, g = this.genes;
+        const game = this.game, world = game.world, g = this.genes, t = this.t;
+        const w = game.weather.now;
         this.age += dt;
         this.cooldown -= dt;
 
         const tile = world.tileAt(this.x, this.z);
         if (!tile) { game.kill(this, 'got lost'); return; }
-        const climate = game.climate(tile);
-        const dT = climate.temp - g.prefTemp;
-        // Big bodies keep warm (Bergmann's rule), small ones shed heat.
-        const tdiff = dT < 0 ? -dT / g.size : dT * (0.55 + 0.45 * g.size);
-        const d = Math.max(0, tdiff - 12) / 32 + Math.max(0, Math.abs(climate.moisture - g.prefMoisture) - 20) / 90;
-        this.discomfort = d;
-        this.coldSide = dT < 0;
         const inWater = !isWalkable(tile);
+        const shelter = this.sheltered(tile);
+        const climate = game.climate(tile);
 
-        const extraLegs = (legCount(g.legs) - 2) / 2;
-        let burn = 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015 + d * 1.1
-            + extraLegs * 0.05 + game.weatherBurn * (this.sheltered(tile) ? 0.4 : 1);
-        if (this.moving) burn += 0.2 * g.speed * g.speed;
+        // Dark skin warms up in the sun, light skin stays cool.
+        const temp = climate.temp + (0.5 - g.pigment) * 14 * game.sunshine;
+        const dT = temp - g.prefTemp;
+        // Fur warms, unless it is soaked by rain or water.
+        const soaked = inWater ? 0.7 : Math.min(1, w.rain) * 0.6;
+        const furWarm = g.fur * 14 * (1 - soaked);
+        const huddle = Math.min(3, this.huddle) * 3.5 * g.sociability;
+        // Big bodies keep warm (Bergmann's rule), small ones shed heat.
+        const cold = Math.max(0, -dT - furWarm - g.plump * 6 - huddle) / g.size;
+        const heat = Math.max(0, dT + g.fur * 9 + g.plump * 6 - g.tail * 4) * (0.55 + 0.45 * g.size);
+        const d = Math.max(0, Math.max(cold, heat) - 12) / 32 + Math.max(0, Math.abs(climate.moisture - g.prefMoisture) - 20) / 90;
+        this.discomfort = d;
+        this.coldSide = cold > heat;
+
+        let burn = (t.baseBurn + d * 1.1) * t.burnMul;
+        burn += game.weatherBurn * (shelter ? 0.4 : 1) * (1 - g.tail * 0.3) * (1.15 - 0.15 * g.size);
+        if (this.moving) burn += 0.2 * g.speed * g.speed * (1 + g.plump * 0.3) + g.curiosity * 0.08;
         if (!this.adult) burn *= 0.7;
+        if (this.action === 'rest') burn *= this.status === 'Sleeping' ? 0.7 : 0.8;
         this.energy -= burn * dt;
         if (this.energy <= 0) {
             this.energy = 0;
-            this.health -= 5 * dt;
+            // Fat buys time when food runs out.
+            this.health -= 5 * (1 - g.plump * 0.5) * dt;
         }
         if (d > 0.8) this.health -= (d - 0.8) * 10 * dt;
-        if (inWater) this.health -= 8 * dt;
-        if (this.energy > 35 && d < 0.8 && !inWater) this.health = Math.min(100, this.health + 1.5 * dt);
+        if (inWater) this.health -= 8 * (1 - g.webbing * 0.85) * (1 - g.tail * 0.15) * dt;
+        if (w.hail > 0.3 && !shelter) this.health -= 1.2 * w.hail * (1 - g.plump * 0.3) * dt;
+        if (this.energy > 35 && d < 0.8 && !inWater) this.health = Math.min(100, this.health + 1.5 * t.heal * dt);
 
         const hungerPenalty = this.energy < 30 ? 30 - this.energy : 0;
-        this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - (this.crowded ? 10 : 0), 0, 100);
+        this.mood = clamp(100 - d * 55 - hungerPenalty - (this.lonely ? 15 : 0) - (this.crowded ? 10 : 0) + (w.mood || 0), 0, 100);
 
         if (this.health <= 0) {
-            const cause = this.energy <= 0 ? 'starved' : inWater ? 'drowned' : this.coldSide ? 'froze' : 'overheated';
+            const cause = this.energy <= 0 ? 'starved' : inWater ? 'drowned' : w.hail > 0.3 && !shelter && d < 0.8 ? 'was hit by hail'
+                : this.coldSide ? 'froze' : 'overheated';
             game.kill(this, cause);
             return;
         }
-        if (this.age >= g.lifespan) {
+        if (this.age >= t.lifespan) {
             game.kill(this, 'died of old age');
             return;
         }
-        this.energy = Math.min(100, this.energy);
+        this.energy = Math.min(t.maxEnergy, this.energy);
 
         this.thinkTimer -= dt;
         switch (this.action) {
@@ -217,7 +284,7 @@ export class Creature {
             case 'rest':
                 this.moving = false;
                 this.restTimer -= dt;
-                if (this.restTimer <= 0 || this.energy < 40) this.action = 'idle';
+                if (this.restTimer <= 0 || this.energy < t.maxEnergy * 0.35) this.action = 'idle';
                 break;
             case 'mate': this.court(dt); break;
             case 'walk':
@@ -239,33 +306,47 @@ export class Creature {
     }
 
     think() {
-        const game = this.game, world = game.world, g = this.genes;
+        const game = this.game, world = game.world, g = this.genes, t = this.t;
         this.thinkTimer = rand(1.0, 1.6);
         const start = world.tileAt(this.x, this.z);
+        const swim = t.swimmer;
         this.newOffset();
+        this.sightNow = g.sight * this.sightFactor();
+        const sight = this.sightNow;
 
-        // Company check, used for mood and social wandering.
-        let near = 0, friend = null, friendD = Infinity;
+        // Company check, used for mood, huddling and social wandering.
+        let near = 0, huddle = 0, sharing = 0, friend = null, friendD = Infinity;
         for (const o of game.creatures) {
             if (o === this) continue;
             const dd = Math.hypot(o.x - this.x, o.z - this.z);
             if (dd < 5) near++;
-            if (dd > 1.2 && dd < friendD && dd < g.sight * game.sightMul + 2) { friendD = dd; friend = o; }
+            if (dd < 1.5) huddle++;
+            if (dd < 0.6) sharing++;
+            if (dd > 1.2 && dd < friendD && dd < sight + 2) { friendD = dd; friend = o; }
         }
+        this.huddle = huddle;
+        this.sharing = sharing;
         this.lonely = g.sociability > 0.6 && near === 0;
         this.crowded = g.sociability < 0.3 && near > 4;
 
         if (!isWalkable(start)) {
-            const visited = world.bfs(start, 8);
-            for (const i of visited) {
-                if (i !== start.i) { this.walkTo(world.pathTo(i), 'escape', 'Swimming to shore'); return; }
+            const swimming = swim && start.height >= 0.12 && this.health > 55;
+            if (!swimming) {
+                const visited = world.bfs(start, 8, false);
+                for (const i of visited) {
+                    if (i !== start.i) { this.walkTo(world.pathTo(i), 'escape', 'Swimming to shore'); return; }
+                }
+                this.status = 'Stranded in the water';
+                return;
             }
-            this.status = 'Stranded in the water';
-            return;
         }
 
-        const hungry = this.energy < 55;
-        if (!hungry && this.ready && game.creatures.length < MAX_POP) {
+        const hungry = this.energy < t.maxEnergy * 0.55;
+        // Nomes breed less when food per head runs short or the island is crowded,
+        // so booms flatten before the winter hits.
+        const crowd = game.creatures.length / MAX_POP;
+        const chance = clamp(game.foodPerNome / 2.5, 0.08, 1) * (1 - crowd * crowd * 0.85);
+        if (!hungry && this.ready && game.creatures.length < MAX_POP && Math.random() < chance) {
             const p = game.findPartner(this);
             if (p) {
                 this.startCourting(p);
@@ -274,15 +355,15 @@ export class Creature {
             }
         }
 
-        if (hungry || (this.energy < 85 && start.food > 0.35)) {
-            const visited = world.bfs(start, Math.ceil(g.sight * game.sightMul));
+        if (hungry || (this.energy < t.maxEnergy * 0.85 && start.food > 0.35)) {
+            const visited = world.bfs(start, Math.max(1, Math.ceil(sight)), swim);
             let best = null, bestScore = -Infinity, far = null;
             for (const i of visited) {
-                const t = world.tiles[i];
+                const tl = world.tiles[i];
                 far = i;
-                if (t.food < 0.15) continue;
-                const score = Math.min(t.food, 1.6) - world.bfsDist[i] * 0.12 + t.jitter * 0.05;
-                if (score > bestScore) { bestScore = score; best = t; }
+                if (tl.food < 0.15) continue;
+                const score = Math.min(tl.food, 1.6) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
+                if (score > bestScore) { bestScore = score; best = tl; }
             }
             if (best === start) {
                 this.action = 'eat';
@@ -296,36 +377,45 @@ export class Creature {
             return;
         }
 
-        if (this.action === 'idle' && Math.random() < 0.25) {
+        // Day Nomes sleep at night, night Nomes by day.
+        const night = game.night;
+        const sleepy = night * (1 - g.nocturnal) + (1 - night) * g.nocturnal * 0.7;
+        if (this.action === 'idle' && Math.random() < 0.25 + sleepy * 0.5) {
             this.action = 'rest';
-            this.restTimer = rand(1.2, 3.5);
-            this.status = 'Resting';
+            const asleep = sleepy > 0.45;
+            this.restTimer = asleep ? rand(3, 6) : rand(1.2, 3.5);
+            this.status = asleep ? 'Sleeping' : 'Resting';
             this.moving = false;
             return;
         }
         if (this.action === 'walk') return;
 
-        const visited = world.bfs(start, 4);
+        // Curious Nomes look further and like far places.
+        const visited = world.bfs(start, 4 + Math.round(g.curiosity * 6), swim);
         let best = null, bestScore = -Infinity;
         for (let k = 0; k < 7; k++) {
             const i = visited[Math.floor(Math.random() * visited.length)];
-            const t = world.tiles[i];
-            const c = game.climate(t);
+            const tl = world.tiles[i];
+            if (!isWalkable(tl)) continue;
+            const c = game.climate(tl);
             const dT = Math.abs(c.temp - g.prefTemp);
-            let score = -dT / 25 - Math.abs(c.moisture - g.prefMoisture) / 80 + Math.random() * 0.3 + Math.min(t.food, 1) * 0.2;
+            let score = -dT / 25 - Math.abs(c.moisture - g.prefMoisture) / 80 + Math.random() * 0.3 + Math.min(tl.food, 1) * 0.2
+                + world.bfsDist[i] * g.curiosity * 0.09;
             if (friend) {
-                const fd = Math.hypot(friend.x - t.x, friend.z - t.z);
+                const fd = Math.hypot(friend.x - tl.x, friend.z - tl.z);
                 score += (g.sociability - 0.4) * (1 - Math.min(fd, 8) / 8) * 1.2;
             }
-            if (score > bestScore) { bestScore = score; best = t; }
+            if (game.weatherBurn > 0.15 && tl.biome === B.FOREST) score += 0.6;
+            if (score > bestScore) { bestScore = score; best = tl; }
         }
         if (!best || best === start) {
             this.action = 'idle';
             this.status = 'Looking around';
             return;
         }
-        const label = this.discomfort > 0.5 ? (this.coldSide ? 'Looking for warmth' : 'Looking for shade')
-            : friend && g.sociability > 0.6 ? 'Joining friends' : 'Wandering';
+        const label = game.weatherBurn > 0.15 && best.biome === B.FOREST ? 'Seeking shelter'
+            : this.discomfort > 0.5 ? (this.coldSide ? 'Looking for warmth' : 'Looking for shade')
+                : friend && g.sociability > 0.6 ? 'Joining friends' : g.curiosity > 0.65 ? 'Exploring' : 'Wandering';
         this.walkTo(world.pathTo(best.i), 'wander', label);
     }
 
@@ -344,7 +434,7 @@ export class Creature {
     moveAlong(dt) {
         if (!this.path.length) { this.moving = false; return true; }
         const next = this.path[0];
-        if (!isWalkable(next)) {
+        if (!this.game.world.passable(next, this.t.swimmer)) {
             this.path = [];
             this.action = 'idle';
             this.thinkTimer = 0;
@@ -361,14 +451,21 @@ export class Creature {
     stepToward(tx, tz, dt) {
         const dx = tx - this.x, dz = tz - this.z;
         const dist = Math.hypot(dx, dz);
-        const here = this.game.world.tileAt(this.x, this.z);
-        // More legs handle rough ground better but are a little slower on the flat.
-        const legs = legCount(this.genes.legs);
-        const grip = legs === 2 ? 0 : legs === 4 ? 0.3 : 0.55;
-        const flat = legs === 2 ? 1.06 : legs === 4 ? 1 : 0.92;
-        const base = here && isWalkable(here) ? BIOMES[here.biome].speed : 0.45;
-        const terrain = (base + (1 - base) * grip) * flat * this.game.windSlow;
-        const sp = this.genes.speed * terrain * (this.adult ? 1 : 0.75) * dt;
+        const g = this.genes, game = this.game;
+        const here = game.world.tileAt(this.x, this.z);
+        let terrain;
+        if (here && isWalkable(here)) {
+            // More legs handle rough ground better but are a little slower on the flat.
+            const legs = this.t.legs;
+            const grip = legs === 2 ? 0 : legs === 4 ? 0.3 : 0.55;
+            const flat = legs === 2 ? 1.06 : legs === 4 ? 1 : 0.92;
+            const base = BIOMES[here.biome].speed;
+            terrain = (base + (1 - base) * grip) * flat * (1 - g.webbing * 0.1);
+        } else {
+            terrain = 0.3 + g.webbing * 0.6 + g.tail * 0.15;
+        }
+        const wind = 1 - 0.15 * game.weather.now.wind * (1.25 - g.size * 0.25 - g.tail * 0.4);
+        const sp = g.speed * terrain * (1 - g.plump * 0.12) * wind * (this.adult ? 1 : 0.75) * dt;
         if (dist <= sp) { this.x = tx; this.z = tz; }
         else { this.x += dx / dist * sp; this.z += dz / dist * sp; }
         if (dist > 0.001) this.heading = Math.atan2(dx, dz);
@@ -377,15 +474,17 @@ export class Creature {
 
     eat(dt, tile) {
         this.moving = false;
-        if (tile.food < 0.03 || this.energy >= 98) {
+        if (tile.food < 0.03 || this.energy >= this.t.maxEnergy - 2) {
             this.action = 'idle';
             this.thinkTimer = rand(0.2, 0.6);
             return;
         }
-        const take = Math.min(tile.food, 0.35 * this.genes.size * dt);
+        // When the patch is shared, horns win the food fight.
+        const share = this.sharing > 0 ? 0.6 + this.genes.horns * 0.8 : 1;
+        const take = Math.min(tile.food, 0.35 * this.genes.size * share * dt);
         tile.food -= take;
         this.energy += take * 80;
-        this.status = 'Eating';
+        this.status = this.sharing > 0 && this.genes.horns > 0.5 ? 'Eating, pushing others away' : 'Eating';
     }
 
     startCourting(p) {
@@ -433,7 +532,7 @@ export class Creature {
             const world = this.game.world;
             const start = world.tileAt(this.x, this.z);
             const goal = world.tileAt(p.x, p.z);
-            world.bfs(start, Math.ceil(this.genes.sight) + 4);
+            world.bfs(start, Math.ceil(this.sightNow) + 4, this.t.swimmer);
             if (!goal || !world.reached(goal.i)) { this.stopCourting(); return; }
             this.path = world.pathTo(goal.i);
         }
@@ -442,11 +541,6 @@ export class Creature {
             this.stepToward(next.x, next.z, dt);
             if (Math.hypot(next.x - this.x, next.z - this.z) < 0.02) this.path.shift();
         }
-    }
-
-    // Forests shelter from storms.
-    sheltered(tile) {
-        return !!tile && tile.biome === B.FOREST;
     }
 
     cancelPlans() {
@@ -471,7 +565,7 @@ export class Creature {
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
         this.root.rotation.y += diff * Math.min(1, dt * 10);
 
-        const growth = 0.45 + 0.55 * Math.min(1, this.age / MATURITY_AGE);
+        const growth = 0.45 + 0.55 * Math.min(1, this.age / this.t.maturity);
         let scale = this.genes.size * growth;
 
         if (this.dead) {
@@ -497,7 +591,9 @@ export class Creature {
             this.pivot.position.y = this.legLen;
             this.pivot.rotation.x = this.action === 'eat' ? 0.3 + Math.sin(time * 12) * 0.12 : 0;
         }
-        const squash = this.action === 'rest' ? 0.86 : 1 + Math.sin(time * 2 + this.id) * 0.015;
+        // Fast metabolism breathes faster.
+        const breath = 2 + this.genes.metabolism * 4;
+        const squash = this.action === 'rest' ? 0.86 : 1 + Math.sin(time * breath + this.id) * 0.02;
         this.body.scale.set(1 / Math.sqrt(squash), 0.92 * squash, 1 / Math.sqrt(squash));
         if (this.dragged) {
             for (const l of this.legs) l.hip.rotation.x = Math.sin(time * 14 + l.phase) * 0.9;
@@ -505,6 +601,7 @@ export class Creature {
         // Happy Nomes wag their tail.
         const wag = this.mood > 60 ? 0.45 : 0.12;
         this.tail.rotation.y = Math.sin(time * (this.mood > 60 ? 9 : 3) + this.id) * wag * anim;
+        if (this.parts.antennae) this.parts.antennae.rotation.z = Math.sin(time * 3 + this.id) * 0.15;
 
         const mats = emoteMaterials();
         let emote = null;

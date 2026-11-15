@@ -10,11 +10,24 @@ const WEATHER_ICONS = {
     storm: '<path d="M7 13h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7 13z"/><path d="M13 13l-3 4.5h4l-3 4.5"/>',
     fog: '<path d="M4 9h16M3 13h18M5 17h14"/>',
     heat: '<circle cx="12" cy="12" r="5.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/><path d="M10 12h4" />',
-    snow: '<path d="M7 13h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7 13z"/><path d="M8 17v.01M12 19v.01M16 17v.01M10 21v.01M14 21v.01"/>'
+    snow: '<path d="M7 13h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7 13z"/><path d="M8 17v.01M12 19v.01M16 17v.01M10 21v.01M14 21v.01"/>',
+    windy: '<path d="M3 9h11a3 3 0 1 0-3-3M3 13h15a3 3 0 1 1-3 3M3 17h7"/>',
+    drizzle: '<path d="%C"/><path d="M9 17v1M13 18v1M17 17v1"/>',
+    downpour: '<path d="%C"/><path d="M7 16l-1.5 5M11 16l-1.5 5M15 16l-1.5 5M19 16l-1.5 5"/>',
+    hail: '<path d="%C"/><circle cx="8" cy="18" r="1.2"/><circle cx="12.5" cy="20" r="1.2"/><circle cx="16.5" cy="17.5" r="1.2"/>',
+    sandstorm: '<path d="M3 8h13M5 12h16M3 16h12M8 20h9"/><circle cx="18.5" cy="8" r="1"/>',
+    blizzard: '<path d="%C"/><path d="M6 17l3 1M11 19l3 1M16 16l3 1M8 21v.01M14 22v.01"/>',
+    frost: '<path d="M12 2v20M3.3 7l17.4 10M3.3 17L20.7 7M9 4l3 2 3-2M9 20l3-2 3 2"/>',
+    rainbow: '<path d="M2 18a10 10 0 0 1 20 0M5.5 18a6.5 6.5 0 0 1 13 0M9 18a3 3 0 0 1 6 0"/>',
+    aurora: '<path d="M3 16c3-8 5 4 9-4s6 3 9-5M3 20c3-6 6 2 9-3s6 2 9-3"/>'
 };
+for (const k in WEATHER_ICONS) WEATHER_ICONS[k] = WEATHER_ICONS[k].replace('%C', 'M7 13h10a4 4 0 0 0 .5-8 5.5 5.5 0 0 0-10.6 1.3A3.4 3.4 0 0 0 7 13z');
 const WEATHER_HINTS = {
     clear: 'Normal growth', cloudy: 'Mild', rain: 'Plants grow fast', storm: 'Seek forests',
-    fog: 'Nomes see little', heat: 'Plants dry out', snow: 'Very cold'
+    fog: 'Few eyes, little sight', heat: 'Plants dry out', snow: 'Fur pays off',
+    windy: 'Small Nomes struggle', drizzle: 'Plants like it', downpour: 'The sea rises', hail: 'Hide in forests',
+    sandstorm: 'Hard to see', blizzard: 'Huddle or freeze', frost: 'Nothing grows', rainbow: 'Spirits lifted',
+    aurora: 'Spirits lifted'
 };
 
 function bodyGeneText(k, v) {
@@ -28,9 +41,12 @@ function bodyGeneText(k, v) {
 
 const $ = id => document.getElementById(id);
 const SEASON_COLORS = ['#9bd36e', '#f0b04a', '#d9783b', '#6fb3e0'];
-const POOL_KEYS = ['size', 'speed', 'sight', 'prefTemp', 'prefMoisture', 'sociability', 'lifespan'];
+const POOL_KEYS = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2');
 
 function fmtGene(k, v) {
+    if (GENES[k] && GENES[k].body) return bodyGeneText(k, v);
+    if (k === 'pigment') return (v < 0.35 ? 'dark ' : v > 0.65 ? 'light ' : 'medium ') + Math.round(v * 100) + '%';
+    if (GENES[k] && GENES[k].max === 1) return Math.round(v * 100) + '%';
     if (k === 'size') return v.toFixed(2) + 'x';
     if (k === 'speed') return v.toFixed(2);
     if (k === 'sight') return v.toFixed(1);
@@ -182,7 +198,7 @@ export class UI {
         const g = this.game;
         if (!g.world) return;
         $('season-name').textContent = g.seasonName;
-        $('year').textContent = `Year ${g.year}`;
+        $('year').textContent = `Year ${g.year} · ${g.night > 0.5 ? 'night' : g.sunHeight < 0.25 ? (g.dayPhase < 0.5 ? 'dawn' : 'dusk') : 'day'}`;
         const ring = $('season-ring');
         ring.style.strokeDashoffset = (94.25 * (1 - g.seasonProgress)).toFixed(2);
         ring.style.stroke = SEASON_COLORS[g.seasonIndex];
@@ -202,8 +218,10 @@ export class UI {
             document.querySelector('.weather').dataset.w = wk;
         }
 
-        if (g.history.length !== this.lastHistoryLen) {
-            this.lastHistoryLen = g.history.length;
+        // The history is capped, so its length stops changing. Redraw on the newest sample instead.
+        const lastT = g.history.length ? g.history[g.history.length - 1].t : -1;
+        if (lastT !== this.lastHistoryLen) {
+            this.lastHistoryLen = lastT;
             this.drawChart();
         }
         this.poolTimer -= dt;
@@ -337,10 +355,9 @@ export class UI {
     creatureHtml(c) {
         const col = '#' + c.color.getHexString();
         const col2 = '#' + accentColor(c.genes).getHexString();
-        const genes = Object.entries(GENES).filter(([k, d]) => k !== 'hue' && !d.body)
-            .map(([k, d]) => `<dt>${d.label}</dt><dd>${fmtGene(k, c.genes[k])}</dd>`).join('');
-        const body = Object.entries(GENES).filter(([k, d]) => d.body && k !== 'hue2')
-            .map(([k, d]) => `<dt>${d.label}</dt><dd>${bodyGeneText(k, c.genes[k])}</dd>`).join('');
+        const row = ([k, d]) => `<dt title="${esc(d.effect || '')}">${d.label}</dt><dd title="${esc(d.effect || '')}">${fmtGene(k, c.genes[k])}</dd>`;
+        const genes = Object.entries(GENES).filter(([k, d]) => k !== 'hue' && !d.body).map(row).join('');
+        const body = Object.entries(GENES).filter(([k, d]) => d.body && k !== 'hue2').map(row).join('');
         const bar = (f, label, color) => `<div><div class="bar-label"><span>${label}</span><span data-f="${f}-v"></span></div>
             <div class="bar"><i data-f="${f}" style="background:${color}"></i></div></div>`;
         return `<div class="sel-head"><div class="avatar" style="background:radial-gradient(circle at 70% 30%, ${col2} 0 22%, transparent 24%), ${col}"></div><div>
@@ -352,12 +369,16 @@ export class UI {
                 <dt>Children</dt><dd data-f="children"></dd>
                 <dt>Ground</dt><dd data-f="ground"></dd>
                 <dt>Temperature</dt><dd data-f="temp"></dd>
+                <dt>Sees now</dt><dd data-f="sight"></dd>
+                <dt>Stomach</dt><dd>${Math.round(c.maxEnergy)}</dd>
+                <dt>Grown up at</dt><dd>${Math.round(c.maturity)}s</dd>
+                <dt>Lives up to</dt><dd>${Math.round(c.t.lifespan)}s</dd>
             </dl>
             <h2 style="margin-top:12px">Genes</h2>
             <dl class="kv">${genes}</dl>
             <h2 style="margin-top:12px">Body <small>${esc(describeBody(c.genes))}</small></h2>
             <dl class="kv">${body}</dl>
-            <p class="hint">Legs help on rough ground and cost a little energy. The rest only changes looks.</p>
+            <p class="hint">Every gene helps somewhere and costs something. Hover a gene to see how.</p>
             ${c.dead ? '' : `<div class="sel-actions"><button class="btn small ghost" id="sel-follow">Follow (F)</button></div>`}`;
     }
 
@@ -371,7 +392,8 @@ export class UI {
         };
         set('sub', `Generation ${c.generation} · ${c.lifeStage} · age ${Math.floor(c.age)}`);
         set('status', c.dead ? `${c.cause.charAt(0).toUpperCase() + c.cause.slice(1)}.` : c.status + (c.ready && c.action !== 'mate' ? ' · ready for a partner' : ''));
-        w('energy', c.energy);
+        w('energy', c.energy / c.maxEnergy * 100);
+        set('sight', `${c.sightNow.toFixed(1)} of ${c.genes.sight.toFixed(1)}${c.t.swimmer ? ' · swims' : ''}`);
         w('health', c.health);
         w('mood', c.mood);
         set('children', c.children);

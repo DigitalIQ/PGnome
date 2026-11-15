@@ -695,6 +695,12 @@ details[open] > summary::before { transform: rotate(45deg); }
 .weather[data-w="storm"] svg { stroke: #c9b3f0; }
 .weather[data-w="fog"] svg, .weather[data-w="cloudy"] svg { stroke: var(--muted); }
 .weather[data-w="snow"] svg { stroke: #eef3f6; }
+.weather[data-w="blizzard"] svg, .weather[data-w="frost"] svg, .weather[data-w="hail"] svg { stroke: #dceaf5; }
+.weather[data-w="sandstorm"] svg { stroke: #d8b27a; }
+.weather[data-w="rainbow"] svg { stroke: #f08ad0; }
+.weather[data-w="aurora"] svg { stroke: #5affc8; }
+.weather[data-w="windy"] svg { stroke: var(--leaf); }
+.kv dt[title] { cursor: help; text-decoration: underline dotted rgba(236, 228, 208, 0.25); text-underline-offset: 3px; }
 
 .weather strong {
     display: block;

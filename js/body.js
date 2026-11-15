@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { legCount, eyeCount, patternName } from './config.js';
 import { mulberry32 } from './rng.js';
 
@@ -23,14 +24,21 @@ const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.25
 const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
 const hornMat = new THREE.MeshStandardMaterial({ color: 0xefe3c4, roughness: 0.6 });
 const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+const footGeo = new THREE.CylinderGeometry(1, 1, 1, 8);
+const stalkGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 5);
+stalkGeo.translate(0, 0.5, 0);
+// Night Nomes' pupils glow in the dark. main.js sets the glow each frame.
+export const glowPupilMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a });
+const darkPupil = new THREE.Color(0x1a1a1a), glowPupil = new THREE.Color(0xffe27a);
+export function setNightGlow(n) { glowPupilMat.color.copy(darkPupil).lerp(glowPupil, n); }
 
+// Skin tone sets how light the body is, fur makes it softer and less saturated.
 export function baseColor(g) {
-    const cold = g.prefTemp < 35;
-    return new THREE.Color().setHSL(g.hue / 360, cold ? 0.32 : 0.55, cold ? 0.7 : 0.56);
+    return new THREE.Color().setHSL(g.hue / 360, 0.58 - (g.fur ?? 0.3) * 0.25, 0.2 + (g.pigment ?? 0.5) * 0.58);
 }
 
 export function accentColor(g) {
-    return new THREE.Color().setHSL(g.hue2 / 360, 0.5, g.prefTemp < 35 ? 0.8 : 0.4);
+    return new THREE.Color().setHSL(g.hue2 / 360, 0.55, (g.pigment ?? 0.5) > 0.55 ? 0.38 : 0.72);
 }
 
 // Torso radius along the body, t runs from the rear (0) to the nose (1).
@@ -94,6 +102,11 @@ export function describeBody(g) {
     const kind = patternName(g.pattern);
     if (kind !== 'plain') parts.push(kind);
     if (g.horns > 0.5) parts.push('horned');
+    if (g.fur > 0.6) parts.push('furry');
+    if (g.webbing > 0.55) parts.push('webbed feet');
+    if (g.curiosity > 0.5) parts.push('feelers');
+    if (g.pickiness > 0.6) parts.push('crest');
+    if (g.nocturnal > 0.6) parts.push('night eyes');
     if (g.bodyLen > 1.3) parts.push('long');
     else if (g.bodyLen < 0.9) parts.push('stubby');
     if (g.plump > 0.75) parts.push('round');
@@ -103,9 +116,12 @@ export function describeBody(g) {
 
 export function buildBody(g, seed) {
     const P = profile(g);
-    const limbMat = new THREE.MeshStandardMaterial({ color: baseColor(g), roughness: g.prefTemp < 35 ? 1 : 0.55 });
+    const rough = 0.5 + g.fur * 0.5;
+    const limbMat = new THREE.MeshStandardMaterial({ color: baseColor(g), roughness: rough });
     const skin = skinTexture(g, seed);
-    const skinMat = new THREE.MeshStandardMaterial({ map: skin, roughness: g.prefTemp < 35 ? 1 : 0.55 });
+    const skinMat = new THREE.MeshStandardMaterial({ map: skin, roughness: rough });
+    const accentMat = new THREE.MeshStandardMaterial({ color: accentColor(g), roughness: 0.6 });
+    const owned = [];
     const root = new THREE.Group();
 
     // Legs. Two, four or six, spread along the belly.
@@ -121,6 +137,14 @@ export function buildBody(g, seed) {
             leg.scale.set(1 + g.plump * 0.4, legLen + 0.06, 1 + g.plump * 0.4);
             leg.castShadow = true;
             hip.add(leg);
+            // Webbed feet: flat paddles that grow with the gene.
+            if (g.webbing > 0.3) {
+                const foot = new THREE.Mesh(footGeo, accentMat);
+                const w = 0.04 + (g.webbing - 0.3) * 0.14;
+                foot.scale.set(w, 0.014, w * 1.4);
+                foot.position.set(0, -(legLen + 0.06), 0.03);
+                hip.add(foot);
+            }
             root.add(hip);
             legs.push({ hip, phase: (side > 0 ? Math.PI : 0) + p * Math.PI });
         }
@@ -147,7 +171,7 @@ export function buildBody(g, seed) {
     const at = t => ({ z: (t - 0.5) * P.L, r: P.r(t) });
 
     // Eyes. Size follows the sight gene.
-    const eyeSize = 0.05 + ((g.sight - 3) / 7) * 0.045;
+    const eyeSize = (0.05 + ((g.sight - 3) / 7) * 0.045) * (1 + g.nocturnal * 0.6);
     const front = at(0.8);
     const eyeSpots = eyeCount(g.eyes) === 1 ? [[0, 1.5]]
         : eyeCount(g.eyes) === 3 ? [[-0.55, 1], [0.55, 1], [0, 0.85]]
@@ -157,7 +181,7 @@ export function buildBody(g, seed) {
         eye.scale.setScalar(eyeSize * (eyeSpots.length === 1 ? 1.5 : 1));
         const up = sx === 0 && eyeSpots.length === 3 ? 0.92 : 0.62;
         eye.position.set(sx * front.r * 0.62, P.y + front.r * up * 0.92, front.z + front.r * 0.5 * sz);
-        const pupil = new THREE.Mesh(GEO.eye, pupilMat);
+        const pupil = new THREE.Mesh(GEO.eye, g.nocturnal > 0.5 ? glowPupilMat : pupilMat);
         pupil.scale.setScalar(0.55);
         pupil.position.set(0, 0, 0.6);
         eye.add(pupil);
@@ -191,15 +215,61 @@ export function buildBody(g, seed) {
         }
     }
 
-    // Cold lovers get a fur tuft on the head.
-    if (g.prefTemp < 35) {
-        const tuftAt = at(0.58);
-        for (let k = -1; k <= 1; k++) {
-            const tuft = new THREE.Mesh(tuftGeo, limbMat);
-            tuft.scale.set(0.035, 0.09 + (k === 0 ? 0.04 : 0), 0.035);
-            tuft.position.set(k * 0.045, P.y + tuftAt.r * 0.88, tuftAt.z - Math.abs(k) * 0.02);
-            tuft.rotation.z = -k * 0.35;
-            pivot.add(tuft);
+    // Fur: spikes over the back, denser and longer with the gene.
+    if (g.fur > 0.25) {
+        const n = Math.round(6 + g.fur * 22);
+        const len = 0.04 + g.fur * 0.08;
+        const rnd = mulberry32(seed + 5);
+        const pieces = [];
+        for (let k = 0; k < n; k++) {
+            const tt = 0.12 + rnd() * 0.7;
+            const a = (rnd() * 2 - 1) * 1.7;
+            const r = P.r(tt);
+            const cone = tuftGeo.clone();
+            cone.scale(0.024, len * (0.7 + rnd() * 0.6), 0.024);
+            cone.rotateZ(-a);
+            cone.translate(Math.sin(a) * r * 0.95, P.y + Math.cos(a) * r * 0.88, (tt - 0.5) * P.L);
+            pieces.push(cone);
+        }
+        const furGeo = mergeGeometries(pieces);
+        pieces.forEach(p => p.dispose());
+        owned.push(furGeo);
+        const fur = new THREE.Mesh(furGeo, limbMat);
+        fur.castShadow = true;
+        pivot.add(fur);
+    }
+
+    // Curious Nomes grow feelers.
+    let antennae = null;
+    if (g.curiosity > 0.5) {
+        antennae = new THREE.Group();
+        const top = at(0.82);
+        antennae.position.set(0, P.y + top.r * 0.8, top.z);
+        const al = 0.1 + (g.curiosity - 0.5) * 0.5;
+        for (const side of [-1, 1]) {
+            const stalk = new THREE.Mesh(stalkGeo, limbMat);
+            stalk.scale.y = al;
+            stalk.rotation.set(0.5, 0, -side * 0.45);
+            antennae.add(stalk);
+            const knob = new THREE.Mesh(GEO.ball, accentMat);
+            knob.scale.setScalar(0.03);
+            knob.position.set(side * Math.sin(0.45) * al, Math.cos(0.45) * Math.cos(0.5) * al, Math.sin(0.5) * al);
+            antennae.add(knob);
+        }
+        pivot.add(antennae);
+    }
+
+    // Picky Nomes show off a crest in their accent color.
+    if (g.pickiness > 0.6) {
+        const crestAt = at(0.6);
+        const n = 3 + Math.round((g.pickiness - 0.6) * 8);
+        for (let k = 0; k < n; k++) {
+            const f = new THREE.Mesh(tuftGeo, accentMat);
+            const sp = (k / (n - 1) - 0.5);
+            f.scale.set(0.02, 0.1 + (0.5 - Math.abs(sp)) * 0.12, 0.05);
+            f.position.set(0, P.y + crestAt.r * 0.9, crestAt.z - sp * 0.18);
+            f.rotation.x = -sp * 1.2;
+            pivot.add(f);
         }
     }
 
@@ -227,12 +297,14 @@ export function buildBody(g, seed) {
     root.add(hit);
 
     return {
-        root, pivot, body, legs, tail, hit, legLen, limbMat,
+        root, pivot, body, legs, tail, hit, legLen, limbMat, antennae,
         dispose() {
             torsoGeo.dispose();
+            owned.forEach(o => o.dispose());
             skin.dispose();
             skinMat.dispose();
             limbMat.dispose();
+            accentMat.dispose();
         }
     };
 }

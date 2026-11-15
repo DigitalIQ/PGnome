@@ -1,8 +1,10 @@
 import { WEATHER, WEATHER_ODDS } from './config.js';
 import { rand, lerp } from './rng.js';
 
-const FIELDS = ['temp', 'wet', 'growth', 'sight', 'burn', 'light', 'fog', 'rain', 'snow', 'wind'];
+const FIELDS = ['temp', 'wet', 'growth', 'sight', 'burn', 'light', 'fog', 'cloud', 'rain', 'snow', 'hail', 'dust',
+    'wind', 'leaves', 'flood', 'lightning', 'haze', 'frost', 'rainbow', 'aurora', 'mood'];
 const BLEND_TIME = 5;
+const WET = ['drizzle', 'rain', 'downpour', 'storm'];
 
 function pick(season, not) {
     const odds = Object.entries(WEATHER_ODDS[season]).filter(([k]) => k !== not);
@@ -13,6 +15,16 @@ function pick(season, not) {
         if (r <= 0) return k;
     }
     return odds[0][0];
+}
+
+// Weather that does not fit the season turns into something that does.
+function fit(key, season) {
+    if (season === 3 && WET.includes(key) && key !== 'storm') return key === 'downpour' ? 'blizzard' : 'snow';
+    if (season !== 3 && (key === 'aurora')) return 'clear';
+    if (season !== 3 && season !== 2 && (key === 'snow' || key === 'blizzard')) return 'rain';
+    if (season !== 1 && (key === 'heat' || key === 'sandstorm')) return season === 3 ? 'frost' : 'clear';
+    if (season === 1 && key === 'frost') return 'clear';
+    return key;
 }
 
 // Weather runs as a chain of spells. Each spell lasts a while and blends into the next.
@@ -32,13 +44,13 @@ export class Weather {
     update(dt, season) {
         this.timer -= dt;
         let changed = null;
-        // Rain turns to snow in winter, snow to rain in summer.
-        if (season === 3 && this.key === 'rain') changed = this.set('snow');
-        else if (season !== 3 && season !== 2 && this.key === 'snow') changed = this.set('rain');
-        else if (season !== 1 && this.key === 'heat') changed = this.set('clear');
+        const fitted = fit(this.key, season);
+        if (fitted !== this.key) changed = this.set(fitted);
         if (this.timer <= 0) {
-            changed = this.set(pick(season, this.key));
-            this.timer = rand(18, 45) * (this.key === 'storm' ? 0.6 : 1);
+            const after = WET.includes(this.key) && Math.random() < 0.4 && season !== 3 ? 'rainbow' : fit(pick(season, this.key), season);
+            changed = this.set(after) || changed;
+            const short = { storm: 0.6, rainbow: 0.45, downpour: 0.6, hail: 0.5, blizzard: 0.7 }[this.key] || 1;
+            this.timer = rand(18, 45) * short;
         }
         if (this.blend < 1) this.blend = Math.min(1, this.blend + dt / BLEND_TIME);
         this.mix();
