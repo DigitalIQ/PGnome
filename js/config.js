@@ -54,6 +54,16 @@ export const LURKER_GENES = {
     habitat: { label: 'Forest liking', min: 0, max: 1 },
     lifespan: { label: 'Lifespan', min: 500, max: 1200 }
 };
+// Prowlers hunt on the ground: they sniff out Nomes, stalk them and run them down.
+export const PROWLER_GENES = {
+    speed: { label: 'Sprint speed', min: 0.8, max: 1.8 },
+    stamina: { label: 'Stamina', min: 0.2, max: 1 },
+    scent: { label: 'Nose', min: 2, max: 9 },
+    size: { label: 'Size', min: 0.7, max: 1.5 },
+    pack: { label: 'Pack hunting', min: 0, max: 1 },
+    night: { label: 'Night hunting', min: 0, max: 1 },
+    lifespan: { label: 'Lifespan', min: 500, max: 1200 }
+};
 
 export const DISASTERS = {
     quake: { name: 'Earthquake' },
@@ -158,5 +168,7 @@ export const GOALS = [
     { id: 'pop100', label: 'Grow to 100 Nomes at once' },
     { id: 'poison', label: 'Evolve poison tolerance over 70%' },
     { id: 'dam', label: 'Let the Nomes build land from the sea' },
-    { id: 'disaster', label: 'Keep 20 Nomes alive through a disaster' }
+    { id: 'disaster', label: 'Keep 20 Nomes alive through a disaster' },
+    { id: 'species', label: 'Watch one species split into two' },
+    { id: 'outrun', label: 'Outrun a prowler 10 times' }
 ];

@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { GENES, B, BIOMES, FOUNDERS, MAX_POP, YEAR_LENGTH, BREED_COOLDOWN, SEASONS, GOALS, SAVE_KEY, MODES, DAY_LENGTH, legCount, HAWK_GENES, LURKER_GENES } from './config.js';
+import { GENES, B, BIOMES, FOUNDERS, MAX_POP, YEAR_LENGTH, BREED_COOLDOWN, SEASONS, GOALS, SAVE_KEY, MODES, DAY_LENGTH, legCount, HAWK_GENES, LURKER_GENES, PROWLER_GENES } from './config.js';
 import { World, isWalkable } from './world.js';
 import { Creature, randomGenes, mixGenes, getNextId, setNextId, speciesTemplate } from './creature.js';
 import { heartTexture, sparkTexture } from './icons.js';
-import { rand, mulberry32, clamp } from './rng.js';
+import { rand, mulberry32, clamp, randomName } from './rng.js';
 import { Weather } from './weather.js';
-import { Hawk, Lurker, mixPredator, randomPredator } from './predator.js';
+import { Hawk, Lurker, Prowler, mixPredator, randomPredator } from './predator.js';
 import { Disasters } from './disasters.js';
 import { islandName, submitRecord } from './scores.js';
 import { cleanSave } from './validate.js';
@@ -30,6 +30,8 @@ export class Game {
         this.weather = new Weather();
         this.hawks = [];
         this.lurkers = [];
+        this.prowlers = [];
+        this.species = [];
         this.hawksOn = true;
         this.disastersOn = true;
         this.shake = 0;
@@ -47,9 +49,14 @@ export class Game {
         this.effects.forEach(e => { this.scene.remove(e.sprite); e.sprite.material.dispose(); });
         (this.hawks || []).forEach(h => h.dispose());
         (this.lurkers || []).forEach(l => l.dispose());
+        (this.prowlers || []).forEach(p => p.dispose());
         if (this.disasters) this.disasters.dispose();
         this.hawks = [];
         this.lurkers = [];
+        this.prowlers = [];
+        this.species = [];
+        this.speciesTimer = 5;
+        this.nextSpecies = 1;
         this.predatorPool = {};
         this.shake = 0;
         this.hawkTimer = 4;
@@ -91,6 +98,7 @@ export class Game {
             births: 0, deaths: 0, maxGen: 1, peakPop: 0, causes: {}, twins: 0, plans: {},
             weather: {}, strikes: 0, burned: 0, hawk: { dives: 0, catches: 0, escapes: 0, born: 0, died: 0 },
             lurker: { strikes: 0, catches: 0, escapes: 0, born: 0, died: 0 },
+            prowler: { chases: 0, catches: 0, escapes: 0, born: 0, died: 0 }, alarms: 0, speciesSeen: 1,
             food: { plants: 0, greens: 0, fruit: 0, nuts: 0, shroom: 0, roots: 0, seaweed: 0, nectar: 0, fed: 0 },
             poison: { cases: 0, spat: 0 }, plague: { cases: 0 }, work: { burrows: 0, dams: 0, planted: 0, drained: 0 },
             disasters: [], landMade: 0, deathAge: { sum: 0, n: 0 }, years: []
@@ -153,7 +161,7 @@ export class Game {
         this.time = data.time;
         const empty = Game.emptyStats(), st = data.stats || {};
         this.stats = { ...empty, ...st };
-        for (const k of ['hawk', 'lurker', 'food', 'poison', 'plague', 'work']) this.stats[k] = { ...empty[k], ...(st[k] || {}) };
+        for (const k of ['hawk', 'lurker', 'prowler', 'food', 'poison', 'plague', 'work']) this.stats[k] = { ...empty[k], ...(st[k] || {}) };
         this.disasters = new Disasters(this, data.disasters);
         this.disastersOn = data.disastersOn ?? true;
         this.predatorPool = data.predatorPool || {};
@@ -170,11 +178,16 @@ export class Game {
         const c0 = this.world.center;
         for (const p of data.predators || []) {
             if (p.kind === 'hawk') this.hawks.push(new Hawk(this, { x: c0 + 30, z: c0 + 30 }, p.genes, p));
-            else if (p.kind === 'lurker') {
+            else if (p.kind === 'lurker' || p.kind === 'prowler') {
                 const t = this.world.tileAt(p.x, p.z);
-                if (t && isWalkable(t)) this.lurkers.push(new Lurker(this, t, p.genes, p));
+                if (!t || !isWalkable(t)) continue;
+                if (p.kind === 'lurker') this.lurkers.push(new Lurker(this, t, p.genes, p));
+                else this.prowlers.push(new Prowler(this, t, p.genes, p));
             }
         }
+        this.species = data.species || [];
+        this.nextSpecies = Math.max(1, ...this.species.map(s => s.id + 1));
+        if (!this.species.length) this.speciesTimer = 0;
         this.lastSeason = this.seasonIndex;
         this.world.seaNow = this.world.seaLevel(this.time);
         this.run = data.run || null;
@@ -201,7 +214,8 @@ export class Game {
             hawksOn: this.hawksOn,
             disastersOn: this.disastersOn,
             disasters: this.disasters.serialize(),
-            predators: [...this.hawks.filter(h => !h.leaving).map(h => h.serialize()), ...this.lurkers.map(l => l.serialize())],
+            predators: [...this.hawks.filter(h => !h.leaving).map(h => h.serialize()), ...this.lurkers.map(l => l.serialize()), ...this.prowlers.map(p => p.serialize())],
+            species: this.species,
             predatorPool: this.predatorPool,
             template: this.template,
             weather: this.weather.serialize(),
@@ -315,7 +329,7 @@ export class Game {
             if (o === c || !o.ready || (o.partner && o.partner !== c)) continue;
             if (o.action === 'mate' && o.partner !== c) continue;
             const d = Math.hypot(o.x - c.x, o.z - c.z);
-            if (d > range || !c.accepts(o) || !o.accepts(c)) continue;
+            if (d > range || !c.compatible(o)) continue;
             const score = d - o.t.attract * 2.5;
             if (score < bestScore) { bestScore = score; best = o; }
         }
@@ -365,6 +379,10 @@ export class Game {
         }
         const guard = a.genes.care >= b.genes.care ? a : b;
         if (guard.genes.care > 0.3) child.guardian = guard;
+        child.speciesId = a.speciesId;
+        if (count === 2) this.creatures[this.creatures.length - 2].speciesId = a.speciesId;
+        // Newborns start with what their parents know about poison spots.
+        for (const p of [a, b]) for (const [i, until] of p.avoid) child.avoid.set(i, until);
         this.stats.births += count;
         this.yearEntry().births += count;
         const legs = legCount(child.genes.legs);
@@ -464,6 +482,8 @@ export class Game {
             const c = this.creatures[i];
             if (c) c.step(dt);
         }
+        this.speciesTimer -= dt;
+        if (this.speciesTimer <= 0) { this.speciesTimer = 10; this.computeSpecies(); }
         this.crowdTimer = (this.crowdTimer || 0) + dt;
         if (this.crowdTimer >= 10) { this.crowdTimer = 0; this.checkCrowding(); }
         if (this.creatures.length > this.stats.peakPop) this.stats.peakPop = this.creatures.length;
@@ -532,7 +552,8 @@ export class Game {
             hawks: this.hawks.filter(h => !h.leaving && !h.away).length, sat: where.satellite, water: where.water, g,
             lurkers: this.lurkers.length, tox: r3(tox / Math.max(1, toxN)), burrows,
             stress: n ? r3(this.creatures.reduce((a, c) => a + c.stress, 0) / n) : 0,
-            hg: avg(active, HAWK_GENES), lg: avg(this.lurkers, LURKER_GENES)
+            hg: avg(active, HAWK_GENES), lg: avg(this.lurkers, LURKER_GENES), pg: avg(this.prowlers, PROWLER_GENES),
+            prowlers: this.prowlers.length, species: this.species.filter(s => s.n >= 4).length || 1,
         });
         if (this.longHistory.length > 1000) this.longHistory.shift();
     }
@@ -617,12 +638,33 @@ export class Game {
         // Plenty of prey feeds more hunters.
         const hawkCap = this.hawksOn && n >= 12 ? Math.min(10, 1 + Math.floor((n - 12) / 16)) : 0;
         const lurkCap = this.hawksOn && n >= 20 ? Math.min(8, Math.floor(n / 25)) : 0;
+        const prowlCap = this.hawksOn && n >= 25 ? Math.min(6, Math.floor(n / 30)) : 0;
         this.hawkTimer -= dt;
         if (this.hawkTimer <= 0) {
             this.hawkTimer = 10;
             const active = this.hawks.filter(h => !h.leaving);
             if (active.length) this.predatorPool.hawk = averageGenes(active, HAWK_GENES);
             if (this.lurkers.length) this.predatorPool.lurker = averageGenes(this.lurkers, LURKER_GENES);
+            if (this.prowlers.length) this.predatorPool.prowler = averageGenes(this.prowlers, PROWLER_GENES);
+            // When prey gets scarce, ground hunters move on: the hungriest one leaves the island.
+            for (const [list, cap] of [[this.prowlers, prowlCap], [this.lurkers, lurkCap]]) {
+                if (list.length > cap) {
+                    const i = list.reduce((b, p, k) => (p.energy < list[b].energy ? k : b), 0);
+                    list[i].dispose();
+                    list.splice(i, 1);
+                }
+            }
+            if (this.prowlers.length < Math.ceil(prowlCap / 2) && Math.random() < Math.min(1, n / 80)) {
+                const land = this.world.tiles.filter(t => (t.biome === B.MEADOW || t.biome === B.FOREST) && t.fire <= 0);
+                if (land.length) {
+                    const t = land[Math.floor(Math.random() * land.length)];
+                    this.prowlers.push(new Prowler(this, t, randomPredator(PROWLER_GENES, this.predatorPool.prowler)));
+                    if (!this.prowlerSeen) {
+                        this.prowlerSeen = true;
+                        this.log('A prowler sniffs around. It hunts on the ground and runs Nomes down. Water, burrows, rough ground and a mob of Nomes stop it.', 'death');
+                    }
+                }
+            }
             if (active.length < Math.max(hawkCap ? 1 : 0, Math.ceil(hawkCap / 3)) && Math.random() < Math.min(1, n / 50)) {
                 const a = Math.random() * Math.PI * 2;
                 this.hawks.push(new Hawk(this, { x: c + Math.cos(a) * 40, z: c + Math.sin(a) * 40 }, randomPredator(HAWK_GENES, this.predatorPool.hawk)));
@@ -659,6 +701,24 @@ export class Game {
             if (!h.leaving && (h.energy <= 0 || h.age > h.genes.lifespan)) { h.leaving = true; this.stats.hawk.died++; }
             if (h.gone) { h.dispose(); this.hawks.splice(i, 1); }
         }
+        for (let i = this.prowlers.length - 1; i >= 0; i--) {
+            const p = this.prowlers[i];
+            p.step(dt);
+            if (p.energy > 125 && this.prowlers.length < prowlCap && p.rest <= 0) {
+                p.energy -= 60;
+                const t = p.tile();
+                if (t && isWalkable(t)) {
+                    this.prowlers.push(new Prowler(this, t, mixPredator(PROWLER_GENES, p.genes, null, this.mutationRate), { gen: p.gen + 1, energy: 60 }));
+                    this.stats.prowler.born++;
+                    if (this.stats.prowler.born === 1) this.log('A prowler raised a cub. Good hunters pass on their genes.', 'death');
+                }
+            }
+            if (p.energy <= 0 || p.age > p.genes.lifespan || (!this.hawksOn && Math.random() < dt * 0.1)) {
+                p.dispose();
+                this.prowlers.splice(i, 1);
+                this.stats.prowler.died++;
+            }
+        }
         for (let i = this.lurkers.length - 1; i >= 0; i--) {
             const l = this.lurkers[i];
             l.step(dt);
@@ -676,6 +736,61 @@ export class Game {
                 this.stats.lurker.died++;
             }
         }
+    }
+
+    // Species: groups of Nomes that can still have young together. Each species keeps
+    // its name over time; a group that can no longer breed with the rest becomes new.
+    computeSpecies() {
+        const list = this.creatures, n = list.length;
+        if (!n) return;
+        const parent = new Int32Array(n);
+        for (let i = 0; i < n; i++) parent[i] = i;
+        const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                if (find(i) === find(j)) continue;
+                if (list[i].compatible(list[j])) parent[find(i)] = find(j);
+            }
+        }
+        const groups = new Map();
+        list.forEach((c, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(c); });
+        const sorted = [...groups.values()].sort((a, b) => b.length - a.length);
+        const old = new Map(this.species.map(s => [s.id, s]));
+        const used = new Set(), next = [];
+        for (const g of sorted) {
+            const votes = new Map();
+            for (const c of g) votes.set(c.speciesId, (votes.get(c.speciesId) || 0) + 1);
+            const ranked = [...votes.entries()].sort((a, b) => b[1] - a[1]);
+            let id = ranked.find(([k]) => old.has(k) && !used.has(k))?.[0];
+            let s;
+            if (id != null) {
+                s = { ...old.get(id) };
+            } else if (g.length >= 4) {
+                const from = ranked.length && old.get(ranked[0][0]);
+                s = { id: this.nextSpecies++, name: speciesName(), since: this.year, from: from ? from.name : null };
+                if (this.species.length) {
+                    this.log(from ? `A new species splits off from the ${from.name}: the ${s.name}.` : `A new species: the ${s.name}.`, 'birth');
+                    this.stats.speciesSeen = (this.stats.speciesSeen || 1) + 1;
+                }
+            } else {
+                // Small strays keep the name of the species they came from.
+                const fallback = next[0] || [...old.values()][0];
+                for (const c of g) c.speciesId = fallback ? fallback.id : 0;
+                if (fallback) fallback.n += g.length;
+                continue;
+            }
+            used.add(s.id);
+            let hue = 0;
+            for (const c of g) { c.speciesId = s.id; hue += c.genes.hue; }
+            s.n = g.length;
+            s.hue = Math.round(hue / g.length);
+            next.push(s);
+        }
+        for (const s of this.species) {
+            if (!used.has(s.id) && s.n >= 4) this.log(`The ${s.name} have died out.`, 'death');
+        }
+        this.species = next;
+        if (next.filter(s => s.n >= 5).length >= 2) this.completeGoal('species');
     }
 
     // Crowding has consequences: stress, fights and, where it gets bad, disease.
@@ -794,6 +909,7 @@ export class Game {
         for (const c of this.creatures) c.render(dt, this.renderTime);
         for (const h of this.hawks) h.render(dt);
         for (const l of this.lurkers) l.render(dt);
+        for (const p of this.prowlers) p.render(dt);
         for (let i = this.dying.length - 1; i >= 0; i--) {
             if (this.dying[i].render(dt, this.renderTime)) {
                 this.dying[i].dispose();
@@ -853,4 +969,9 @@ function averageGenes(list, table) {
         out[k] = sum / list.length;
     }
     return out;
+}
+
+function speciesName() {
+    const n = randomName();
+    return n.endsWith('a') || n.endsWith('o') ? n + 'nomes' : n + 'onomes';
 }

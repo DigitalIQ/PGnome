@@ -341,7 +341,9 @@ export class UI {
             <div><b>${st.peak.toFixed(1)}${arrow(st.peak, p.peak, 0.1)}</b><span>highest</span></div>
             <div><b>${(st.deep * 10).toFixed(1)}${arrow(st.deep, p.deep, 0.01)}</b><span>deepest</span></div>${sea}
             <div><b>${g.hawks.filter(h => !h.leaving && !h.away).length}</b><span>hawks</span></div>
-            <div><b>${g.lurkers.length}</b><span>lurkers</span></div>`;
+            <div><b>${g.lurkers.length}</b><span>lurkers</span></div>
+            <div><b>${g.prowlers.length}</b><span>prowlers</span></div>
+            <div><b>${g.species.filter(s => s.n >= 4).length || 1}</b><span>species</span></div>`;
         $('island-row').classList.toggle('living', g.world.living);
     }
 
@@ -388,6 +390,7 @@ export class UI {
             <dl class="kv">
                 <dt>Parents</dt><dd>${c.parents ? c.parents.map(esc).join(' & ') : 'wild'}</dd>
                 <dt>Children</dt><dd data-f="children"></dd>
+                <dt>Species</dt><dd data-f="species"></dd>
                 <dt>Ground</dt><dd data-f="ground"></dd>
                 <dt>Temperature</dt><dd data-f="temp"></dd>
                 <dt>Sees now</dt><dd data-f="sight"></dd>
@@ -412,6 +415,8 @@ export class UI {
             set(f + '-v', Math.round(v));
         };
         set('sub', `Generation ${c.generation} · ${c.lifeStage} · age ${Math.floor(c.age)}`);
+        const sp = this.game.species.find(s => s.id === c.speciesId);
+        set('species', sp ? `${sp.name} (${sp.n})` : '-');
         const left = c.busyLeft;
         const ill = c.plague > 0 ? ' · has the plague' : c.poison > 0.2 ? ' · poisoned' : '';
         set('status', c.dead ? `${c.cause.charAt(0).toUpperCase() + c.cause.slice(1)}.`

@@ -1,4 +1,4 @@
-import { GENES, BIOMES, WEATHER, YEAR_LENGTH, MODES, FOODS, HAWK_GENES, LURKER_GENES, DISASTERS, legCount, eyeCount, patternName } from './config.js';
+import { GENES, BIOMES, WEATHER, YEAR_LENGTH, MODES, FOODS, HAWK_GENES, LURKER_GENES, PROWLER_GENES, DISASTERS, legCount, eyeCount, patternName } from './config.js';
 import { STAT_GENES } from './game.js';
 import { isWalkable } from './world.js';
 import { scoreOf } from './scores.js';
@@ -117,7 +117,8 @@ export class StatsView {
             tile('twin births', fmt(s.twins)),
             tile('average age now', Math.round(avgAge) + 's'),
             tile('average age at death', Math.round(deathAge) + 's'),
-            tile('caught by predators', fmt(s.hawk.catches + s.lurker.catches), `${fmt(s.hawk.catches)} hawks, ${fmt(s.lurker.catches)} lurkers`),
+            tile('caught by predators', fmt(s.hawk.catches + s.lurker.catches + s.prowler.catches), `${fmt(s.hawk.catches)} hawks, ${fmt(s.lurker.catches)} lurkers, ${fmt(s.prowler.catches)} prowlers`),
+            tile('species now', fmt(g.species.filter(sp => sp.n >= 4).length || 1), `${fmt(s.speciesSeen || 1)} so far`),
             tile('poisoned', fmt(s.poison.cases), `${fmt(s.poison.spat)} times spat out`),
             tile('disasters', fmt(s.disasters.length)),
             tile('crowding stress', Math.round((g.meanStress || 0) * 100) + '%', `${fmt(s.fights || 0)} fights over food`),
@@ -145,13 +146,17 @@ export class StatsView {
         this.addChart('Hawks hunting', h.map(p => [p.t, p.hawks ?? 0]), SERIES.orange);
         this.addChart('Lurkers', h.map(p => [p.t, p.lurkers ?? 0]), SERIES.yellow);
         this.addChart('Crowding stress (%)', h.map(p => [p.t, Math.round((p.stress ?? 0) * 100)]), SERIES.red);
+        this.addChart('Prowlers', h.map(p => [p.t, p.prowlers ?? 0]), SERIES.magenta);
+        this.addChart('Species', h.map(p => [p.t, p.species ?? 1]), SERIES.violet);
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
         const whereBars = bars([
             { label: 'Main island', value: where.main }, { label: 'Other islands', value: where.satellite }, { label: 'In the water', value: where.water }
         ], SERIES.aqua, n);
         const biomeBars = bars(BIOMES.map((b, i) => ({ label: b.name, value: counts[i] })).filter(r => r.label !== 'Water'), SERIES.green, n);
-        return `${section('Over time', `<div class="st-charts">${charts}</div>`, 'Each chart has its own scale. Hover a chart to read exact values.')}
+        const spBars = bars(g.species.filter(sp => sp.n > 0).map(sp => ({ label: sp.name, value: sp.n, title: `${sp.name}: ${sp.n} Nomes, since year ${sp.since}${sp.from ? `, split from the ${sp.from}` : ''}` })), SERIES.violet);
+        return `${section('Species', spBars, 'Nomes that can still have young together form one species. Populations whose genes or colors drift too far apart split into new ones.')}
+            ${section('Over time', `<div class="st-charts">${charts}</div>`, 'Each chart has its own scale. Hover a chart to read exact values.')}
             <div class="st-cols">${section('Where they live', whereBars)}${section('Ground under their feet', biomeBars)}</div>`;
     }
 
@@ -311,7 +316,8 @@ export class StatsView {
                 return { label: d.label, value: (v - d.min) / (d.max - d.min) * 100, text: d.max === 1 ? Math.round(v * 100) + '%' : v >= 100 ? Math.round(v) + 's' : v.toFixed(2), noShare: true };
             }), SERIES.orange, null, 100);
         };
-        const hawks = g.hawks.filter(x => !x.leaving), lurkers = g.lurkers;
+        const hawks = g.hawks.filter(x => !x.leaving), lurkers = g.lurkers, prowlers = g.prowlers;
+        const pk = Object.keys(PROWLER_GENES);
         if (h.length >= 2) {
             // Only samples with predators alive; values as 0 to 100 of each gene range.
             const series = (key, table, keys, k) => {
@@ -325,6 +331,8 @@ export class StatsView {
             add('Hawk size', series('hg', HAWK_GENES, hk, 'size'), SERIES.aqua);
             add('Lurker camouflage', series('lg', LURKER_GENES, lk, 'camo'), SERIES.yellow);
             add('Lurker venom', series('lg', LURKER_GENES, lk, 'venom'), SERIES.magenta);
+            add('Prowler sprint speed', series('pg', PROWLER_GENES, pk, 'speed'), SERIES.red);
+            add('Prowler nose', series('pg', PROWLER_GENES, pk, 'scent'), SERIES.green);
         }
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
@@ -333,6 +341,9 @@ export class StatsView {
             tile('hawk dives', fmt(s.hawk.dives), `${pct(s.hawk.catches, s.hawk.dives)} successful`),
             tile('lurkers now', fmt(lurkers.length), `${fmt(s.lurker.born)} born, ${fmt(s.lurker.died)} died`),
             tile('lurker strikes', fmt(s.lurker.strikes), `${pct(s.lurker.catches, s.lurker.strikes)} successful`),
+            tile('prowlers now', fmt(prowlers.length), `${fmt(s.prowler.born)} born, ${fmt(s.prowler.died)} died`),
+            tile('prowler chases', fmt(s.prowler.chases), `${pct(s.prowler.catches, s.prowler.chases)} successful, ${fmt(s.prowler.escapes)} outrun`),
+            tile('alarm calls', fmt(s.alarms || 0)),
             tile('plague cases', fmt(s.plague.cases)),
             tile('land made by lava', fmt(s.landMade || 0))
         ].join('');
@@ -343,6 +354,7 @@ export class StatsView {
         return `<div class="st-tiles">${tiles}</div>
             ${charts ? section('How the hunters evolve', `<div class="st-charts">${charts}</div>`, 'Predators that hunt well raise young and pass on their genes. 0 to 100 of each gene range.') : ''}
             <div class="st-cols">${section('Hawk genes now', now(hawks, HAWK_GENES))}${section('Lurker genes now', now(lurkers, LURKER_GENES))}</div>
+            <div class="st-cols">${section('Prowler genes now', now(prowlers, PROWLER_GENES))}</div>
             ${section('Disasters', list)}`;
     }
 

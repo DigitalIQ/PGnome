@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { B, legCount, HAWK_GENES, LURKER_GENES, BIOMES } from './config.js';
+import { B, legCount, HAWK_GENES, LURKER_GENES, PROWLER_GENES, BIOMES } from './config.js';
 import { isWalkable } from './world.js';
 import { rand, clamp, gauss } from './rng.js';
 
@@ -235,7 +235,10 @@ export class Hawk {
         const c = best, cg = c.genes;
         const notice = clamp((0.08 + (c.sightNow / 10) * 0.32 + (c.t.eyes - 2) * 0.1 + Math.min(3, c.huddle) * 0.08 * (0.5 + cg.sociability)
             + cg.vigilance * 0.25) * (1 - c.distraction * 0.6) * (1 - ge.stealth * 0.45), 0.03, 0.92);
-        if (Math.random() < notice) c.flee();
+        if (Math.random() < notice) {
+            c.flee();
+            c.alarm(this.pos.x, this.pos.z, 'hawk');
+        }
     }
 
     strike() {
@@ -430,6 +433,7 @@ export class Lurker {
                 g.stats.lurker.escapes++;
                 c.status = 'Jumped away from a lurker';
                 c.flee();
+                c.alarm(this.x, this.z, 'lurker');
                 return;
             }
             const grown = Math.min(1, c.age / c.maturity);
@@ -511,6 +515,337 @@ export class Lurker {
         const genes = {};
         for (const k in this.genes) genes[k] = r(this.genes[k]);
         return { kind: 'lurker', genes, energy: r(this.energy), age: r(this.age), gen: this.gen, x: r(this.x), z: r(this.z) };
+    }
+}
+
+// ---------- Prowlers ----------
+// Ground hunters, a bit like foxes. They follow their nose to the Nomes, sneak up and
+// sprint. Forests do not stop them, but water, burrows, rough ground and a mob of
+// Nomes do. A good nose finds Nomes in fog and at night, stamina decides how long
+// a chase lasts, pack hunters work together.
+
+const pBody = new THREE.CapsuleGeometry(0.13, 0.42, 3, 8);
+pBody.rotateX(Math.PI / 2);
+const pHead = new THREE.ConeGeometry(0.11, 0.3, 7);
+pHead.rotateX(Math.PI / 2);
+const pEar = new THREE.ConeGeometry(0.04, 0.1, 4);
+const pLeg = new THREE.CylinderGeometry(0.028, 0.022, 0.22, 5);
+pLeg.translate(0, -0.11, 0);
+const pTail = new THREE.ConeGeometry(0.06, 0.34, 6);
+pTail.rotateX(-Math.PI / 2 - 0.5);
+const foxColor = new THREE.Color(0xb8642e), greyColor = new THREE.Color(0x5d6066), darkColor = new THREE.Color(0x2e2f36);
+const pEyeMat = new THREE.MeshBasicMaterial({ color: 0xf2d04a });
+
+// How hard a prowler runs on each ground: marsh and rock slow it down most.
+const RUN = [0, 0.9, 1, 0.85, 0.6, 0.7, 0];
+
+export class Prowler {
+    constructor(game, tile, genes, opts = {}) {
+        this.game = game;
+        this.kind = 'prowler';
+        this.genes = cleanPredator(PROWLER_GENES, genes) || randomPredator(PROWLER_GENES);
+        this.x = tile.x;
+        this.z = tile.z;
+        this.y = tile.rh;
+        this.energy = opts.energy ?? 70;
+        this.age = opts.age ?? 0;
+        this.gen = opts.gen ?? 1;
+        this.state = 'roam';
+        this.path = [];
+        this.target = null;
+        this.wind = 1;
+        this.rest = 0;
+        this.think = Math.random();
+        this.heading = Math.random() * Math.PI * 2;
+        this.phase = Math.random() * 10;
+        this.moving = false;
+        this.build();
+    }
+
+    build() {
+        const ge = this.genes;
+        this.mat = new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true });
+        // Night hunters are grey and dark, day hunters fox-red.
+        this.mat.color.copy(foxColor).lerp(greyColor, ge.night).lerp(darkColor, ge.night * ge.pack * 0.6);
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(pBody, this.mat);
+        body.position.y = 0.26;
+        body.castShadow = true;
+        g.add(body);
+        const head = new THREE.Mesh(pHead, this.mat);
+        head.position.set(0, 0.34, 0.38);
+        g.add(head);
+        for (const side of [-1, 1]) {
+            const ear = new THREE.Mesh(pEar, this.mat);
+            ear.position.set(side * 0.06, 0.45, 0.3);
+            g.add(ear);
+            const eye = new THREE.Mesh(eyeGeo, pEyeMat);
+            eye.position.set(side * 0.05, 0.38, 0.42);
+            g.add(eye);
+        }
+        const tail = new THREE.Mesh(pTail, this.mat);
+        tail.position.set(0, 0.3, -0.36);
+        g.add(tail);
+        this.tail = tail;
+        this.legs = [];
+        for (const [x, z, ph] of [[-0.08, 0.17, 0], [0.08, 0.17, Math.PI], [-0.08, -0.17, Math.PI], [0.08, -0.17, 0]]) {
+            const l = new THREE.Mesh(pLeg, this.mat);
+            l.position.set(x, 0.22, z);
+            g.add(l);
+            this.legs.push({ l, ph });
+        }
+        // Long legs for sprinters.
+        const legLen = 0.8 + (ge.speed - 0.8) * 0.4;
+        this.legs.forEach(o => { o.l.scale.y = legLen; });
+        g.scale.setScalar(0.75 + ge.size * 0.35);
+        this.mesh = g;
+        this.game.scene.add(g);
+    }
+
+    // How well this prowler senses right now. The nose works in fog and dark, the eyes do not.
+    get senses() {
+        const g = this.game, ge = this.genes, light = 1 - g.night;
+        const awake = light * (1 - ge.night * 0.5) + g.night * (0.2 + ge.night * 0.9);
+        return ge.scent * awake * (0.75 + 0.25 * g.sightMul);
+    }
+
+    tile() { return this.game.world.tileAt(this.x, this.z); }
+
+    canStand(x, z) {
+        const t = this.game.world.tileAt(x, z);
+        return !!t && isWalkable(t) && t.fire <= 0 && this.game.world.heat[t.i] < 0.4;
+    }
+
+    step(dt) {
+        const g = this.game, ge = this.genes;
+        this.age += dt;
+        this.energy -= (0.18 + ge.size * 0.1 + (ge.speed - 0.8) * 0.08 + ge.stamina * 0.05 + (ge.lifespan - 500) * 0.00008) * dt;
+        const here = this.tile();
+        if (!here || here.biome === B.LAVA) { this.energy = -1; return; }
+        if (!isWalkable(here)) { this.escapeWater(); }
+        if (this.rest > 0) { this.rest -= dt; this.moving = false; return; }
+        if (!g.hawksOn) { this.moving = false; return; }
+        this.wind = Math.min(1, this.wind + dt * 0.08 * (0.5 + ge.stamina));
+        if (this.state === 'chase') return this.chase(dt);
+        if (this.state === 'stalk') return this.stalk(dt);
+        this.think -= dt;
+        if (this.think <= 0) {
+            this.think = 0.8 + Math.random() * 0.6;
+            if (this.pick()) return;
+        }
+        this.walkPath(dt, 0.55 * ge.speed);
+    }
+
+    escapeWater() {
+        const world = this.game.world, t = this.tile();
+        let best = null, bd = Infinity;
+        for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
+            const n = world.get(t.x + dx, t.z + dz);
+            if (n && isWalkable(n) && Math.abs(dx) + Math.abs(dz) < bd) { bd = Math.abs(dx) + Math.abs(dz); best = n; }
+        }
+        if (best) { this.x = best.x; this.z = best.z; }
+        else this.energy = -1;
+    }
+
+    // Smell for prey. Lone, small, sleeping or busy Nomes smell easiest. Burrows and water hide them.
+    pick() {
+        const g = this.game, world = g.world, ge = this.genes;
+        const range = this.senses;
+        let best = null, bestW = 0;
+        for (const c of g.creatures) {
+            if (c.dead || c.dragged) continue;
+            const d = Math.hypot(c.x - this.x, c.z - this.z);
+            if (d > range) continue;
+            const t = world.tileAt(c.x, c.z);
+            if (!t || !isWalkable(t) || t.burrow > 0.35) continue;
+            const grown = Math.min(1, c.age / c.maturity);
+            const size = c.genes.size * (0.45 + 0.55 * grown);
+            let w = clamp(1.5 - size * 0.6 + (ge.size - 1) * 0.5, 0.1, 1.6) * (1 - d / (range + 2));
+            if (c.huddle === 0) w *= 1.6;
+            w *= 1 + c.distraction * 0.5;
+            if (c.status === 'Sleeping' || c.status === 'Hibernating') w *= 1.5;
+            if (w > bestW) { bestW = w; best = c; }
+        }
+        if (best) {
+            this.target = best;
+            this.state = 'stalk';
+            this.path = [];
+            return true;
+        }
+        // Nothing in reach: wander towards where Nomes have been walking.
+        if (!this.path.length) {
+            const start = this.tile();
+            const visited = Array.from(world.bfs(start, 8, false));
+            let goal = null, gs = -Infinity;
+            for (let k = 0; k < 10 && visited.length; k++) {
+                const t = world.tiles[visited[Math.floor(Math.random() * visited.length)]];
+                if (!this.canStand(t.x, t.z)) continue;
+                const s = t.trail * 2 + Math.random();
+                if (s > gs) { gs = s; goal = t; }
+            }
+            if (goal) { world.bfs(start, 8, false); this.path = world.pathTo(goal.i); }
+        }
+        return false;
+    }
+
+    walkPath(dt, speed) {
+        const next = this.path[0];
+        if (!next) { this.moving = false; return; }
+        if (!this.canStand(next.x, next.z)) { this.path = []; this.moving = false; return; }
+        this.moveTo(next.x, next.z, speed, dt);
+        if (Math.hypot(next.x - this.x, next.z - this.z) < 0.03) this.path.shift();
+    }
+
+    moveTo(tx, tz, speed, dt) {
+        const dx = tx - this.x, dz = tz - this.z, d = Math.hypot(dx, dz);
+        if (d < 0.001) { this.moving = false; return true; }
+        const t = this.tile();
+        const sp = speed * (t ? RUN[t.biome] || 0.5 : 0.5) * dt;
+        let nx = d <= sp ? tx : this.x + dx / d * sp, nz = d <= sp ? tz : this.z + dz / d * sp;
+        if (!this.canStand(nx, nz)) {
+            // Slide along water or fire instead of running into it.
+            if (this.canStand(nx, this.z)) nz = this.z;
+            else if (this.canStand(this.x, nz)) nx = this.x;
+            else { this.moving = false; return false; }
+        }
+        this.x = nx;
+        this.z = nz;
+        this.heading = Math.atan2(dx, dz);
+        this.moving = true;
+        return true;
+    }
+
+    // Sneak closer. Every second the Nome may notice; then the chase begins.
+    stalk(dt) {
+        const c = this.target, g = this.game, ge = this.genes;
+        if (!c || c.dead || this.lost(c)) return this.giveUp(1);
+        const d = Math.hypot(c.x - this.x, c.z - this.z);
+        if (!this.moveTo(c.x, c.z, 0.45 * ge.speed, dt)) return this.giveUp(1);
+        const cg = c.genes;
+        const notice = clamp((0.05 + cg.vigilance * 0.25 + (c.sightNow / 10) * 0.2 + (c.t.eyes - 2) * 0.06 + Math.min(3, c.huddle) * 0.05)
+            * (1 - c.distraction * 0.6) * (1.3 - ge.size * 0.3) * (d < 2.5 ? 1.5 : 1), 0, 0.9);
+        if (Math.random() < notice * dt * 2 || d < 1.6) {
+            this.state = 'chase';
+            this.chaseT = 0;
+            g.stats.prowler.chases++;
+            if (d >= 1.6 || Math.random() < notice) {
+                c.fleeFrom(this.x, this.z, 'prowler');
+                c.alarm(this.x, this.z, 'prowler');
+            }
+            // A pack mate nearby joins the hunt.
+            if (ge.pack > 0.4) {
+                for (const o of g.prowlers) {
+                    if (o !== this && o.state !== 'chase' && o.rest <= 0 && Math.hypot(o.x - this.x, o.z - this.z) < 5 && Math.random() < o.genes.pack) {
+                        o.target = c;
+                        o.state = 'chase';
+                        o.chaseT = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    lost(c) {
+        const t = this.game.world.tileAt(c.x, c.z);
+        return !t || !isWalkable(t) || t.burrow > 0.35;
+    }
+
+    chase(dt) {
+        const c = this.target, g = this.game, ge = this.genes;
+        if (!c || c.dead) return this.giveUp(2);
+        if (this.lost(c)) {
+            if (c.fleeTimer > 0) this.escaped(c);
+            return this.giveUp(3);
+        }
+        this.chaseT += dt;
+        // Sprinting burns breath; stamina makes it last.
+        this.wind -= dt / (2 + ge.stamina * 7);
+        this.energy -= 0.3 * dt;
+        if (this.wind <= 0) {
+            this.escaped(c);
+            return this.giveUp(6 + ge.size * 4);
+        }
+        const d = Math.hypot(c.x - this.x, c.z - this.z);
+        if (d < 0.45) return this.attack(c);
+        if (!this.moveTo(c.x, c.z, 1.55 * ge.speed, dt)) {
+            this.escaped(c);
+            return this.giveUp(3);
+        }
+    }
+
+    escaped(c) {
+        const g = this.game;
+        g.stats.prowler.escapes++;
+        if (!c.dead) c.status = 'Outran a prowler';
+        if (g.stats.prowler.escapes >= 10) g.completeGoal('outrun');
+    }
+
+    attack(c) {
+        const g = this.game, ge = this.genes, cg = c.genes;
+        const grown = Math.min(1, c.age / c.maturity);
+        const size = cg.size * (0.45 + 0.55 * grown);
+        let chance = clamp(0.6 - (size - ge.size) * 0.45, 0.08, 0.85);
+        if (cg.horns > 0.6) chance *= 0.6;
+        if (legCount(cg.legs) === 6) chance *= 0.9;
+        // A mob of social Nomes drives the prowler off and can hurt it.
+        let mob = 0;
+        for (const o of g.creatures) if (o !== c && Math.abs(o.x - c.x) < 1.4 && Math.abs(o.z - c.z) < 1.4) mob += 0.3 + o.genes.sociability * 0.7 + (o.genes.horns > 0.6 ? 0.4 : 0);
+        chance *= 1 / (1 + mob * 0.35);
+        if (c.guardian && !c.guardian.dead && Math.hypot(c.guardian.x - c.x, c.guardian.z - c.z) < 1.5) chance *= 0.6;
+        // Pack mates close by make the attack work.
+        for (const o of g.prowlers) if (o !== this && o.target === c && Math.hypot(o.x - c.x, o.z - c.z) < 1.5) chance = Math.min(0.95, chance * 1.35);
+        if (Math.random() < chance) {
+            g.stats.prowler.catches++;
+            this.energy += 40 + size * 25;
+            g.burst(c.x, c.y + 0.3, c.z, 'spark', 0x9a6a40, 8);
+            g.kill(c, 'was caught by a prowler');
+            for (const o of g.prowlers) if (o !== this && o.target === c) { o.energy += 12; o.giveUp(4); }
+            return this.giveUp((12 + ge.size * 10) * rand(0.85, 1.15));
+        }
+        if (mob > 1.5) this.energy -= 6 * mob;
+        c.health -= 8 + ge.size * 8;
+        c.lastHarm = 'was mauled by a prowler';
+        if (c.health <= 0) { g.kill(c, 'was caught by a prowler'); return this.giveUp(10); }
+        this.escaped(c);
+        c.fleeFrom(this.x, this.z, 'prowler');
+        this.giveUp(2 + mob);
+    }
+
+    giveUp(rest) {
+        this.state = 'roam';
+        this.target = null;
+        this.path = [];
+        this.rest = rest;
+        this.moving = false;
+    }
+
+    render(dt) {
+        const t = this.tile();
+        if (t) this.y += ((isWalkable(t) ? t.rh : 0.3) - this.y) * Math.min(1, dt * 10);
+        const m = this.mesh;
+        m.position.set(this.x, this.y, this.z);
+        let diff = this.heading - m.rotation.y;
+        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        m.rotation.y += diff * Math.min(1, dt * 10);
+        const run = this.state === 'chase';
+        this.phase += dt * (this.moving ? (run ? 16 : 8) : 0);
+        for (const o of this.legs) o.l.rotation.x = this.moving ? Math.sin(this.phase + o.ph) * (run ? 0.9 : 0.5) : 0;
+        // Stalking crouches low.
+        m.rotation.x = 0;
+        this.tail.rotation.y = Math.sin(this.phase * 0.5) * 0.3;
+        m.scale.y = (0.75 + this.genes.size * 0.35) * (this.state === 'stalk' ? 0.8 : 1);
+    }
+
+    dispose() {
+        this.game.scene.remove(this.mesh);
+        this.mat.dispose();
+    }
+
+    serialize() {
+        const r = v => Math.round(v * 1000) / 1000;
+        const genes = {};
+        for (const k in this.genes) genes[k] = r(this.genes[k]);
+        return { kind: 'prowler', genes, energy: r(this.energy), age: r(this.age), gen: this.gen, x: r(this.x), z: r(this.z) };
     }
 }
 

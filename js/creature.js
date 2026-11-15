@@ -11,6 +11,8 @@ const DEFAULTS = {
     metabolism: 0.5, fur: 0.3, pigment: 0.5, nocturnal: 0.15, webbing: 0.15, curiosity: 0.4, litter: 0.2, pickiness: 0.3,
     jaw: 0.3, claws: 0.25, toxinRes: 0.2, palate: 0.3, vigilance: 0.3, care: 0.3, builder: 0.2, immunity: 0.3
 };
+const DIST_GENES = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2');
+export const SPECIES_DIST = 0.17;
 // What each job is called while a Nome does it.
 const JOB_TEXT = { burrow: 'Digging a burrow', dam: 'Building a dam', plant: 'Planting seeds', drain: 'Digging a ditch' };
 const JOB_GO = { burrow: 'Looking for a place to dig', dam: 'Heading to the shore to build', plant: 'Carrying seeds', drain: 'Heading into the marsh to dig' };
@@ -134,6 +136,7 @@ export class Creature {
         this.lastHarm = null;
         // Crowding stress, 0 = relaxed. It builds up where too many Nomes live close together.
         this.stress = opts.stress ?? 0;
+        this.speciesId = opts.speciesId ?? 0;
 
         this.action = 'idle';
         this.status = 'Looking around';
@@ -193,7 +196,7 @@ export class Creature {
     get distraction() {
         const a = this.action;
         const base = a === 'eat' ? 0.6 : a === 'work' ? 0.85 : a === 'mate' ? 0.7 : a === 'care' ? 0.3
-            : a === 'rest' ? (this.status === 'Sleeping' ? 1 : 0.4) : 0.15;
+            : a === 'rest' ? (this.status === 'Sleeping' || this.status === 'Hibernating' ? 1 : 0.4) : 0.15;
         return base * (1 - this.genes.vigilance * 0.7);
     }
 
@@ -220,6 +223,23 @@ export class Creature {
 
     get color() {
         return baseColor(this.genes);
+    }
+
+    // Genetic distance to another Nome, 0 = identical. Colors do not count.
+    geneDist(o) {
+        let sum = 0, n = 0;
+        for (const k of DIST_GENES) {
+            const d = GENES[k];
+            sum += Math.abs(this.genes[k] - o.genes[k]) / (d.max - d.min);
+            n++;
+        }
+        return sum / n;
+    }
+
+    // Two Nomes can have young only if both like the other's color and their genes
+    // have not drifted too far apart. Populations that drift apart become species.
+    compatible(o) {
+        return this.accepts(o) && o.accepts(this) && this.geneDist(o) < SPECIES_DIST;
     }
 
     accepts(o) {
@@ -310,7 +330,7 @@ export class Creature {
         if (this.plague > 0) burn += 0.35 * (1 - g.immunity * 0.85);
         if (!this.adult) burn *= 0.7;
         if (this.action === 'rest') {
-            burn *= this.status === 'Sleeping' ? 0.7 : 0.8;
+            burn *= this.status === 'Hibernating' ? 0.35 : this.status === 'Sleeping' ? 0.7 : 0.8;
             // Droppings make the soil fertile where Nomes rest.
             tile.fert = Math.min(1, tile.fert + 0.0025 * dt);
         }
@@ -485,6 +505,15 @@ export class Creature {
             const asleep = sleepy > 0.45;
             // Sleeping by day out in the open is dangerous. Look for a forest first.
             const cosy = tl => tl.biome === B.FOREST || tl.burrow > 0.35;
+            // Fat Nomes sit out the cold in a burrow or under trees and burn almost nothing.
+            if (game.seasonIndex === 3 && this.adult && this.coldSide && this.discomfort > 0.15 && g.plump > 0.45
+                && this.energy > t.maxEnergy * 0.5 && cosy(start)) {
+                this.action = 'rest';
+                this.restTimer = (15 + g.plump * 25) * rand(0.85, 1.15);
+                this.status = 'Hibernating';
+                this.moving = false;
+                return;
+            }
             if (asleep && (night < 0.5 || game.seasonIndex === 3) && !cosy(start)) {
                 const near = world.bfs(start, 5, swim);
                 for (const i of near) {
@@ -806,11 +835,58 @@ export class Creature {
             return;
         }
         this.moving = false;
+        // Young learn from their parents where the poison grows.
+        for (const [i, until] of this.avoid) if (!ch.avoid.has(i)) ch.avoid.set(i, until);
         // Parents pass on food to their young.
         const give = Math.min(this.energy - this.t.maxEnergy * 0.4, 2.5 * this.genes.care * dt);
         if (give > 0 && ch.energy < ch.t.maxEnergy - 2) {
             this.energy -= give;
             ch.energy += give * 0.9;
+        }
+    }
+
+    // Runs away from a ground hunter: to a burrow, into the water if it can swim, onto
+    // rough ground, or simply as far away as it can get.
+    fleeFrom(px, pz, kind) {
+        const world = this.game.world;
+        const start = world.tileAt(this.x, this.z);
+        if (!start || this.dead || this.dragged) return;
+        if (this.partner) this.stopCourting();
+        this.meal = null;
+        this.job = null;
+        this.fleeTimer = 1.5 + this.genes.vigilance * 2 + this.stress;
+        if (start.burrow > 0.35) { this.status = 'Hiding in a burrow'; return; }
+        const swim = this.t.swimmer;
+        const near = Array.from(world.bfs(start, 5, swim));
+        let best = null, bestS = -Infinity;
+        for (const i of near) {
+            const tl = world.tiles[i];
+            if (tl.fire > 0 || world.heat[i] > 0.3) continue;
+            let s = Math.hypot(tl.x - px, tl.z - pz) - world.bfsDist[i] * 0.35;
+            if (tl.burrow > 0.35) s += 4;
+            if (swim && tl.biome === B.WATER) s += 4;
+            if (tl.biome === B.MARSH || tl.biome === B.ROCK) s += this.t.legs >= 4 ? 1.2 : 0.4;
+            if (s > bestS) { bestS = s; best = tl; }
+        }
+        if (!best || best === start) { this.status = kind === 'prowler' ? 'Cornered by a prowler' : 'Ducking'; return; }
+        world.bfs(start, 5, swim);
+        this.walkTo(world.pathTo(best.i), 'escape', kind === 'prowler' ? 'Running from a prowler' : 'Running away');
+    }
+
+    // Social Nomes warn their neighbours. Those who hear it run too.
+    alarm(px, pz, kind) {
+        const g = this.genes, game = this.game;
+        if (g.sociability < 0.25) return;
+        const r = 2 + g.sociability * 4;
+        game.stats.alarms = (game.stats.alarms || 0) + 1;
+        for (const o of game.creatures) {
+            if (o === this || o.dead || o.fleeTimer > 0) continue;
+            if (Math.abs(o.x - this.x) > r || Math.abs(o.z - this.z) > r) continue;
+            const hear = (0.3 + o.genes.sociability * 0.6) * (o.action === 'rest' && o.status !== 'Resting' ? 0.5 : 1);
+            if (Math.random() >= hear) continue;
+            if (kind === 'hawk') o.flee();
+            else o.fleeFrom(px, pz, kind);
+            if (!o.path.length) o.status = 'Heard an alarm call';
         }
     }
 
@@ -992,7 +1068,7 @@ export class Creature {
             id: this.id, name: this.name, x: r(this.x), z: r(this.z), genes,
             generation: this.generation, parents: this.parents, age: r(this.age),
             energy: r(this.energy), health: r(this.health), cooldown: r(this.cooldown), children: this.children,
-            poison: r(this.poison), plague: r(this.plague), immuneT: r(this.immuneT), stress: r(this.stress)
+            poison: r(this.poison), plague: r(this.plague), immuneT: r(this.immuneT), stress: r(this.stress), speciesId: this.speciesId
         };
     }
 }
