@@ -1,10 +1,10 @@
 import { GENES, BIOMES, WEATHER, YEAR_LENGTH, MODES, FOODS, HAWK_GENES, LURKER_GENES, PROWLER_GENES, DISASTERS, legCount, eyeCount, patternName } from './config.js';
 import { STAT_GENES } from './game.js';
-import { isWalkable } from './world.js';
 import { scoreOf } from './scores.js';
 
-// The statistics window. Everything here is read from the game; nothing changes it,
-// except the "show me" buttons on the notables tab.
+// The statistics window. It reads either the running game or an archived run from the
+// record board (see runs.js). Both offer the same fields. Nothing here changes the game,
+// except the "show me" buttons on the notables tab of the running game.
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -51,6 +51,27 @@ function bars(rows, color = SERIES.blue, total = null, scaleTo = null) {
         </div>`).join('')}</div>`;
 }
 
+// The record holders on the notables tab: title, value to compare, direction, text.
+export const NOTABLES = [
+    ['Oldest', c => c.age, 1, c => `${Math.round(c.age)}s old`],
+    ['Most children', c => c.children, 1, c => `${c.children} children`],
+    ['Newest generation', c => c.generation, 1, c => `generation ${c.generation}`],
+    ['Biggest', c => c.genes.size, 1, c => geneText('size', c.genes.size)],
+    ['Smallest', c => c.genes.size, -1, c => geneText('size', c.genes.size)],
+    ['Fastest', c => c.genes.speed, 1, c => `speed ${geneText('speed', c.genes.speed)}`],
+    ['Sharpest eyes', c => c.genes.sight, 1, c => `sight ${geneText('sight', c.genes.sight)}`],
+    ['Best swimmer', c => c.genes.webbing + c.genes.lungs * 0.5, 1, c => `webbed feet ${geneText('webbing', c.genes.webbing)}, lungs ${geneText('lungs', c.genes.lungs)}`],
+    ['Most nocturnal', c => c.genes.nocturnal, 1, c => `night life ${geneText('nocturnal', c.genes.nocturnal)}`],
+    ['Furriest', c => c.genes.fur, 1, c => `fur ${geneText('fur', c.genes.fur)}`],
+    ['Most curious', c => c.genes.curiosity, 1, c => `curiosity ${geneText('curiosity', c.genes.curiosity)}`],
+    ['Most loyal to its island', c => c.genes.homing, 1, c => `island loyalty ${geneText('homing', c.genes.homing)}`],
+    ['Most poison-proof', c => c.genes.toxinRes, 1, c => `tolerance ${geneText('toxinRes', c.genes.toxinRes)}`],
+    ['Most alert', c => c.genes.vigilance, 1, c => `alertness ${geneText('vigilance', c.genes.vigilance)}`],
+    ['Best digger', c => c.genes.claws, 1, c => `claws ${geneText('claws', c.genes.claws)}`],
+    ['Busiest builder', c => c.genes.builder, 1, c => `building drive ${geneText('builder', c.genes.builder)}`],
+    ['Longest life ahead', c => c.t.lifespan - c.age, 1, c => `${Math.round(c.t.lifespan - c.age)}s left`]
+];
+
 function section(title, body, hint = '') {
     return `<section class="st-section"><h3>${esc(title)}</h3>${hint ? `<p class="hint">${hint}</p>` : ''}${body}</section>`;
 }
@@ -78,10 +99,15 @@ export class StatsView {
         window.addEventListener('resize', () => { if (!$('stats').classList.contains('hidden')) this.drawCharts(); });
     }
 
-    show() {
+    // source is the running game, or an archived run opened from the record board.
+    show(source = null) {
+        this.source = source;
+        if (source && !TABS.some(([k]) => k === this.tab)) this.tab = 'overview';
         $('stats').classList.remove('hidden');
         this.render();
     }
+
+    get g() { return this.source || this.game; }
 
     hide() {
         $('stats').classList.add('hidden');
@@ -93,8 +119,10 @@ export class StatsView {
             b.classList.toggle('active', on);
             b.setAttribute('aria-selected', on);
         });
-        const g = this.game;
-        $('stats-sub').textContent = `${g.islandName} · ${(MODES[g.mode] || MODES.classic).name} · seed ${g.seed} · year ${g.year}, ${g.seasonName.toLowerCase()}`;
+        const g = this.g;
+        $('stats-sub').textContent = `${g.islandName} · ${(MODES[g.mode] || MODES.classic).name} · seed ${g.seed} · year ${g.year}, ${g.seasonName.toLowerCase()}`
+            + (g.archived ? ` · saved run from ${new Date(g.savedAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}${g.ended ? ', died out' : ''}` : '');
+        $('stats-title').textContent = g.archived ? 'Run statistics' : 'Statistics';
         this.charts = [];
         $('stats-body').innerHTML = this[this.tab]();
         $('stats-body').scrollTop = 0;
@@ -104,9 +132,11 @@ export class StatsView {
     // ---------- Tabs ----------
 
     overview() {
-        const g = this.game, s = g.stats, n = g.creatures.length;
+        const g = this.g, s = g.stats;
+        // An archived run shows how many were alive when it was saved.
+        const n = g.archived ? (g.ended ? 0 : g.sampleOf || g.creatures.length) : g.creatures.length;
         const years = Math.max(1 / 4, g.time / YEAR_LENGTH);
-        const avgAge = n ? g.creatures.reduce((a, c) => a + c.age, 0) / n : 0;
+        const avgAge = g.creatures.length ? g.creatures.reduce((a, c) => a + c.age, 0) / g.creatures.length : 0;
         const deathAge = s.deathAge.n ? s.deathAge.sum / s.deathAge.n : 0;
         const run = g.run ? scoreOf({ mode: g.mode, years: (g.time - g.run.start) / YEAR_LENGTH, gen: s.maxGen, peak: g.runPeak || 0, goals: Object.keys(g.goals).length }) : 0;
         const tiles = [
@@ -135,13 +165,13 @@ export class StatsView {
     }
 
     population() {
-        const g = this.game, h = g.longHistory;
+        const g = this.g, h = g.longHistory;
         if (h.length < 2) return '<p class="hint">Long-term charts build up from a sample every 10 seconds. Come back in a moment.</p>';
         const where = g.whereNomesLive(), n = g.creatures.length;
-        const counts = BIOMES.map(() => 0);
-        for (const c of g.creatures) { const t = g.world.tileAt(c.x, c.z); if (t) counts[t.biome]++; }
+        const counts = g.biomeCounts();
         this.addChart('Nomes alive', h.map(p => [p.t, p.pop]), SERIES.green);
         this.addChart('Living on other islands', h.map(p => [p.t, p.sat ?? 0]), SERIES.aqua);
+        this.addChart('On the far and remote islands', h.map(p => [p.t, (p.far ?? 0) + (p.rem ?? 0)]), SERIES.blue);
         this.addChart('Land tiles', h.map(p => [p.t, p.land]), SERIES.blue);
         this.addChart('Hawks hunting', h.map(p => [p.t, p.hawks ?? 0]), SERIES.orange);
         this.addChart('Lurkers', h.map(p => [p.t, p.lurkers ?? 0]), SERIES.yellow);
@@ -151,7 +181,12 @@ export class StatsView {
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
         const whereBars = bars([
-            { label: 'Main island', value: where.main }, { label: 'Other islands', value: where.satellite }, { label: 'In the water', value: where.water }
+            { label: 'Main island', value: where.main },
+            { label: 'Near islands', value: where.near ?? where.satellite, title: 'Behind a shallow strait every swimmer crosses' },
+            { label: 'Far island', value: where.far ?? 0, title: 'Behind a deep strait. Only strong swimmers with good lungs cross' },
+            { label: 'Remote island', value: where.remote ?? 0, title: 'Out in deep sea. Only driftwood or a falling sea brings Nomes here' },
+            { label: 'New land', value: where.other ?? 0, title: 'Land from lava, or pieces split off by an earthquake' },
+            { label: 'In the water', value: where.water }
         ], SERIES.aqua, n);
         const biomeBars = bars(BIOMES.map((b, i) => ({ label: b.name, value: counts[i] })).filter(r => r.label !== 'Water'), SERIES.green, n);
         const spBars = bars(g.species.filter(sp => sp.n > 0).map(sp => ({ label: sp.name, value: sp.n, title: `${sp.name}: ${sp.n} Nomes, since year ${sp.since}${sp.from ? `, split from the ${sp.from}` : ''}` })), SERIES.violet);
@@ -161,7 +196,7 @@ export class StatsView {
     }
 
     genes() {
-        const g = this.game, h = g.longHistory, n = g.creatures.length;
+        const g = this.g, h = g.longHistory, n = g.creatures.length;
         if (!n) return '<p class="hint">No Nomes alive.</p>';
         const rows = STAT_GENES.map((k, gi) => {
             const d = GENES[k];
@@ -190,12 +225,13 @@ export class StatsView {
                 <div class="st-gene-now"><b>${esc(avgText(k, avg))}</b>${arrow}</div>
             </div>`;
         }).join('');
+        const sample = g.sampleOf ? ` Based on ${g.creatures.length} of ${g.sampleOf} Nomes saved with this run.` : '';
         return section('Every gene', `<div class="st-gene-head"><span>Gene</span><span>Spread today</span><span>Average over time</span><span>Average now</span></div>${rows}`,
-            'Spread: how many Nomes sit at each value from low (left) to high (right). The line shows how the average moved since the island began. The arrow compares today with the first sample.');
+            'Spread: how many Nomes sit at each value from low (left) to high (right). The line shows how the average moved since the island began. The arrow compares today with the first sample.' + sample);
     }
 
     body() {
-        const g = this.game, n = g.creatures.length;
+        const g = this.g, n = g.creatures.length;
         if (!n) return '<p class="hint">No Nomes alive.</p>';
         const count = f => g.creatures.filter(f).length;
         const legs = [2, 4, 6].map(k => ({ label: `${k} legs`, value: count(c => legCount(c.genes.legs) === k) }));
@@ -208,6 +244,8 @@ export class StatsView {
         ];
         const special = [
             { label: 'Swimmers', value: count(c => c.t.swimmer), title: 'Webbed feet over 45%: can cross shallow water' },
+            { label: 'Deep-water swimmers', value: count(c => c.t.swimmer && c.t.swimmer <= 0.09), title: 'Feet and lungs good enough for the deep strait to the far island' },
+            { label: 'Loyal to their island', value: count(c => c.genes.homing > 0.6), title: 'Island loyalty over 60%' },
             { label: 'Night walkers', value: count(c => c.genes.nocturnal > 0.5), title: 'Night life over 50%' },
             { label: 'Furry', value: count(c => c.genes.fur > 0.6) },
             { label: 'With feelers', value: count(c => c.genes.curiosity > 0.5) },
@@ -223,7 +261,7 @@ export class StatsView {
     }
 
     deaths() {
-        const g = this.game, s = g.stats;
+        const g = this.g, s = g.stats;
         if (!s.deaths) return '<p class="hint">No Nome has died yet.</p>';
         const causes = Object.entries(s.causes).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: cap(k), value: v }));
         const ys = s.years.slice(-16);
@@ -237,7 +275,7 @@ export class StatsView {
     }
 
     world() {
-        const g = this.game, s = g.stats, h = g.longHistory, st = g.world.stats();
+        const g = this.g, s = g.stats, h = g.longHistory, st = g.worldNow();
         const wt = Object.values(s.weather).reduce((a, b) => a + b, 0) || 1;
         const weather = Object.entries(s.weather).sort((a, b) => b[1] - a[1])
             .map(([k, v]) => ({ label: WEATHER[k] ? WEATHER[k].name : k, value: v, text: v >= 60 ? `${(v / 60).toFixed(1)} min` : `${Math.round(v)} s` }));
@@ -249,13 +287,14 @@ export class StatsView {
             { label: 'Lightning strikes', value: s.strikes, noShare: true }
         ], SERIES.green);
         const lands = h.map(p => p.land);
-        const isl = g.world.islands();
         const tiles = [
             tile('land tiles now', fmt(st.land), lands.length ? `range ${fmt(Math.min(...lands))} to ${fmt(Math.max(...lands))}` : ''),
-            tile('islands', fmt(isl.count)),
+            tile('islands', fmt(st.islands)),
             tile('highest point', st.peak.toFixed(1)),
             tile('deepest water', (st.deep * 10).toFixed(1)),
-            tile('sea level', `${g.world.seaNow >= 0.36 ? '+' : ''}${Math.round((g.world.seaNow - 0.36) * 100)}`),
+            tile('sea level', `${st.sea >= 0.36 ? '+' : ''}${Math.round((st.sea - 0.36) * 100)}`),
+            tile('seabed washed out', fmt(st.scoured || 0), 'tiles where grazing deepened the water'),
+            tile('swept out on driftwood', fmt((s.drift && s.drift.out) || 0), `${fmt((s.drift && s.drift.landed) || 0)} reached another island`),
             tile('hawk dives', fmt(s.hawk.dives), `${pct(s.hawk.catches, s.hawk.dives)} successful`),
             tile('escaped hawks', fmt(s.hawk.escapes)),
             tile('burrows dug', fmt(s.work.burrows)),
@@ -269,18 +308,9 @@ export class StatsView {
     }
 
     food() {
-        const g = this.game, s = g.stats, h = g.longHistory, f = s.food;
+        const g = this.g, s = g.stats, h = g.longHistory, f = s.food;
         const eaten = Object.keys(FOODS).map(k => ({ label: FOODS[k].name, value: (f[k] || 0) + (k === 'greens' ? f.plants || 0 : 0) }));
-        let tox = 0, toxN = 0, toxic = 0;
-        const avail = { greens: 0, fruit: 0, nuts: 0, shroom: 0, roots: 0, seaweed: 0, nectar: 0 };
-        for (const t of g.world.tiles) {
-            if (t.biome === 0) { avail.seaweed += t.food; continue; }
-            if (!isWalkable(t)) continue;
-            tox += t.tox; toxN++;
-            if (t.tox > 0.35) toxic++;
-            avail.greens += t.food; avail.fruit += t.fruit; avail.nuts += t.nuts; avail.shroom += t.shroom; avail.roots += t.roots;
-            avail.nectar += g.world.bloom[t.i];
-        }
+        const { avail, tox, toxic } = g.foodNow();
         const availBars = bars(Object.keys(avail).map(k => ({ label: FOODS[k].name, value: avail[k], text: avail[k].toFixed(1) })), SERIES.aqua);
         const n = g.creatures.length;
         const resAvg = n ? g.creatures.reduce((a, c) => a + c.genes.toxinRes, 0) / n : 0;
@@ -293,7 +323,7 @@ export class StatsView {
         const charts = this.charts.map((c, i) => `<figure class="st-chart"><figcaption>${esc(c.title)}<span data-now="${i}"></span></figcaption>
             <div class="st-canvas"><canvas data-chart="${i}"></canvas><div class="st-tip" data-tip="${i}"></div></div></figure>`).join('');
         const tiles = [
-            tile('plant poison now', Math.round(tox / Math.max(1, toxN) * 100) + '%', `${fmt(toxic)} tiles with warning colors`),
+            tile('plant poison now', Math.round(tox * 100) + '%', `${fmt(toxic)} tiles with warning colors`),
             tile('poison tolerance', Math.round(resAvg * 100) + '%', 'Nome average'),
             tile('taste', Math.round(palAvg * 100) + '%', 'Nome average'),
             tile('poisoned', fmt(s.poison.cases)),
@@ -307,7 +337,7 @@ export class StatsView {
     }
 
     dangers() {
-        const g = this.game, s = g.stats, h = g.longHistory;
+        const g = this.g, s = g.stats, h = g.longHistory;
         const hk = Object.keys(HAWK_GENES), lk = Object.keys(LURKER_GENES);
         const now = (list, table) => {
             if (!list.length) return '<p class="hint">None right now.</p>';
@@ -359,32 +389,18 @@ export class StatsView {
     }
 
     notables() {
-        const g = this.game, list = g.creatures;
+        const g = this.g, list = g.creatures;
         if (!list.length) return '<p class="hint">No Nomes alive.</p>';
         const best = (f, dir = 1) => list.reduce((a, c) => (f(c) * dir > f(a) * dir ? c : a), list[0]);
-        const items = [
-            ['Oldest', best(c => c.age), c => `${Math.round(c.age)}s old`],
-            ['Most children', best(c => c.children), c => `${c.children} children`],
-            ['Newest generation', best(c => c.generation), c => `generation ${c.generation}`],
-            ['Biggest', best(c => c.genes.size), c => geneText('size', c.genes.size)],
-            ['Smallest', best(c => c.genes.size, -1), c => geneText('size', c.genes.size)],
-            ['Fastest', best(c => c.genes.speed), c => `speed ${geneText('speed', c.genes.speed)}`],
-            ['Sharpest eyes', best(c => c.genes.sight), c => `sight ${geneText('sight', c.genes.sight)}`],
-            ['Best swimmer', best(c => c.genes.webbing), c => `webbed feet ${geneText('webbing', c.genes.webbing)}`],
-            ['Most nocturnal', best(c => c.genes.nocturnal), c => `night life ${geneText('nocturnal', c.genes.nocturnal)}`],
-            ['Furriest', best(c => c.genes.fur), c => `fur ${geneText('fur', c.genes.fur)}`],
-            ['Most curious', best(c => c.genes.curiosity), c => `curiosity ${geneText('curiosity', c.genes.curiosity)}`],
-            ['Most poison-proof', best(c => c.genes.toxinRes), c => `tolerance ${geneText('toxinRes', c.genes.toxinRes)}`],
-            ['Most alert', best(c => c.genes.vigilance), c => `alertness ${geneText('vigilance', c.genes.vigilance)}`],
-            ['Best digger', best(c => c.genes.claws), c => `claws ${geneText('claws', c.genes.claws)}`],
-            ['Busiest builder', best(c => c.genes.builder), c => `building drive ${geneText('builder', c.genes.builder)}`],
-            ['Longest life ahead', best(c => c.t.lifespan - c.age), c => `${Math.round(c.t.lifespan - c.age)}s left`]
-        ];
-        return `<div class="st-notables">${items.map(([title, c, val]) => `
-            <button class="st-notable" data-nome="${c.id}" title="Show ${esc(c.name)} on the island">
-                <i style="background:#${c.color.getHexString()}"></i>
-                <span><small>${esc(title)}</small><b>${esc(c.name)}</b><em>${esc(val(c))}</em></span>
-            </button>`).join('')}</div><p class="hint">Click a Nome to find it on the island.</p>`;
+        const items = NOTABLES.map(([title, f, dir, val]) => [title, best(f, dir), val]);
+        const card = ([title, c, val]) => {
+            const inner = `<i style="background:#${c.color.getHexString()}"></i>
+                <span><small>${esc(title)}</small><b>${esc(c.name)}</b><em>${esc(val(c))}</em></span>`;
+            return g.archived ? `<div class="st-notable">${inner}</div>`
+                : `<button class="st-notable" data-nome="${c.id}" title="Show ${esc(c.name)} on the island">${inner}</button>`;
+        };
+        return `<div class="st-notables">${items.map(card).join('')}</div>
+            <p class="hint">${g.archived ? 'The Nomes as they were when this run was last saved.' : 'Click a Nome to find it on the island.'}</p>`;
     }
 
     // ---------- Charts ----------

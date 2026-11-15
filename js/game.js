@@ -7,7 +7,8 @@ import { rand, mulberry32, clamp, randomName } from './rng.js';
 import { Weather } from './weather.js';
 import { Hawk, Lurker, Prowler, mixPredator, randomPredator } from './predator.js';
 import { Disasters } from './disasters.js';
-import { islandName, submitRecord } from './scores.js';
+import { islandName, submitRecord, loadRecords } from './scores.js';
+import { snapshotRun, saveRun } from './runs.js';
 import { cleanSave } from './validate.js';
 
 export const STAT_GENES = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2');
@@ -101,7 +102,7 @@ export class Game {
             prowler: { chases: 0, catches: 0, escapes: 0, born: 0, died: 0 }, alarms: 0, speciesSeen: 1,
             food: { plants: 0, greens: 0, fruit: 0, nuts: 0, shroom: 0, roots: 0, seaweed: 0, nectar: 0, fed: 0 },
             poison: { cases: 0, spat: 0 }, plague: { cases: 0 }, work: { burrows: 0, dams: 0, planted: 0, drained: 0 },
-            disasters: [], landMade: 0, deathAge: { sum: 0, n: 0 }, years: []
+            disasters: [], landMade: 0, deathAge: { sum: 0, n: 0 }, years: [], drift: { out: 0, landed: 0 }
         };
     }
 
@@ -135,6 +136,12 @@ export class Game {
         };
         if (years < 0.1 && entry.births === 0) return null;
         this.lastRecord = { ...submitRecord(entry), entry };
+        // Keep the statistics of the run for the record board, at most every 45 seconds.
+        const now = Date.now();
+        if (this.lastRecord.kept && (ended || !this.snapAt || now - this.snapAt > 45000)) {
+            this.snapAt = now;
+            try { saveRun(snapshotRun(this), loadRecords().map(r => r.id)); } catch (e) { /* stats stay live only */ }
+        }
         return this.lastRecord;
     }
 
@@ -326,10 +333,12 @@ export class Game {
         const range = c.sightNow + 1 + few * 12;
         let best = null, bestScore = Infinity;
         for (const o of this.creatures) {
-            if (o === c || !o.ready || (o.partner && o.partner !== c)) continue;
+            if (o === c || !o.ready || o.action === 'raft' || (o.partner && o.partner !== c)) continue;
             if (o.action === 'mate' && o.partner !== c) continue;
             const d = Math.hypot(o.x - c.x, o.z - c.z);
             if (d > range || !c.compatible(o)) continue;
+            // Loyal Nomes do not swim over to a partner on another island.
+            if (c.stay) { const ot = this.world.tileAt(o.x, o.z); if (ot && c.foreign(ot.i)) continue; }
             const score = d - o.t.attract * 2.5;
             if (score < bestScore) { bestScore = score; best = o; }
         }
@@ -348,8 +357,16 @@ export class Game {
         const stress = Math.min(1, (a.stress + b.stress) / 2);
         const count = fed && Math.random() < litter * 0.6 && this.creatures.length < MAX_POP - 1 ? 2 : 1;
         let child = null;
+        // Genetic drift: in a small, cut-off group chance changes genes much faster than in
+        // a big population. This is how founders on a remote island drift away from the rest.
+        const home = this.world.tileAt(a.x, a.z), isl = this.world.islands();
+        const id = home ? isl.ids[home.i] : -1;
+        let local = 0;
+        if (id >= 0) for (const c of this.creatures) { const t = this.world.tileAt(c.x, c.z); if (t && isl.ids[t.i] === id) local++; }
+        else local = this.creatures.length;
+        const drift = 1 + 1.6 * Math.max(0, 1 - local / 30);
         for (let k = 0; k < count; k++) {
-            const genes = mixGenes(a.genes, b.genes, this.mutationRate);
+            const genes = mixGenes(a.genes, b.genes, this.mutationRate * drift);
             child = new Creature(this, (a.x + b.x) / 2 + k * 0.2, (a.z + b.z) / 2, genes, {
                 generation: gen, parents: [a.name, b.name], energy: 45 - (count - 1) * 12 + picky * 20 + care * 22 - stress * 15, cooldown: 0, y: a.y
             });
@@ -485,7 +502,7 @@ export class Game {
         this.speciesTimer -= dt;
         if (this.speciesTimer <= 0) { this.speciesTimer = 10; this.computeSpecies(); }
         this.crowdTimer = (this.crowdTimer || 0) + dt;
-        if (this.crowdTimer >= 10) { this.crowdTimer = 0; this.checkCrowding(); }
+        if (this.crowdTimer >= 10) { this.crowdTimer = 0; this.checkCrowding(); this.checkDrift(); }
         if (this.creatures.length > this.stats.peakPop) this.stats.peakPop = this.creatures.length;
         if (this.creatures.length > (this.runPeak || 0)) this.runPeak = this.creatures.length;
 
@@ -549,24 +566,53 @@ export class Game {
         const avg = (list, table) => list.length ? Object.values(averageGenes(list, table)).map(r3) : null;
         this.longHistory.push({
             t: Math.round(this.time), pop: n, land: this.world.stats().land,
-            hawks: this.hawks.filter(h => !h.leaving && !h.away).length, sat: where.satellite, water: where.water, g,
+            hawks: this.hawks.filter(h => !h.leaving && !h.away).length, sat: where.satellite, water: where.water, far: where.far, rem: where.remote, g,
             lurkers: this.lurkers.length, tox: r3(tox / Math.max(1, toxN)), burrows,
             stress: n ? r3(this.creatures.reduce((a, c) => a + c.stress, 0) / n) : 0,
             hg: avg(active, HAWK_GENES), lg: avg(this.lurkers, LURKER_GENES), pg: avg(this.prowlers, PROWLER_GENES),
             prowlers: this.prowlers.length, species: this.species.filter(s => s.n >= 4).length || 1,
         });
         if (this.longHistory.length > 1000) this.longHistory.shift();
+        if (where.remote >= 5) this.completeGoal('remote');
+    }
+
+    // Plain numbers for the statistics window. Archived runs store exactly these.
+    biomeCounts() {
+        const counts = BIOMES.map(() => 0);
+        for (const c of this.creatures) { const t = this.world.tileAt(c.x, c.z); if (t) counts[t.biome]++; }
+        return counts;
+    }
+
+    worldNow() {
+        const st = this.world.stats();
+        return { ...st, islands: this.world.islands().count, sea: this.world.seaNow ?? 0.36 };
+    }
+
+    foodNow() {
+        let tox = 0, toxN = 0, toxic = 0;
+        const avail = { greens: 0, fruit: 0, nuts: 0, shroom: 0, roots: 0, seaweed: 0, nectar: 0 };
+        for (const t of this.world.tiles) {
+            if (t.biome === 0) { avail.seaweed += t.food; continue; }
+            if (!isWalkable(t)) continue;
+            tox += t.tox; toxN++;
+            if (t.tox > 0.35) toxic++;
+            avail.greens += t.food; avail.fruit += t.fruit; avail.nuts += t.nuts; avail.shroom += t.shroom; avail.roots += t.roots;
+            avail.nectar += this.world.bloom[t.i];
+        }
+        return { avail, tox: tox / Math.max(1, toxN), toxic };
     }
 
     whereNomesLive() {
         const { ids, main } = this.world.islands();
-        const out = { main: 0, satellite: 0, water: 0 };
+        const kinds = this.world.islandKinds();
+        const out = { main: 0, satellite: 0, water: 0, near: 0, far: 0, remote: 0, other: 0 };
         for (const c of this.creatures) {
             const t = this.world.tileAt(c.x, c.z);
             if (!t) continue;
-            if (!isWalkable(t)) out.water++;
-            else if (ids[t.i] === main) out.main++;
-            else out.satellite++;
+            if (!isWalkable(t)) { out.water++; continue; }
+            if (ids[t.i] === main) { out.main++; continue; }
+            out.satellite++;
+            out[kinds.get(ids[t.i]) || 'other']++;
         }
         return out;
     }
@@ -809,6 +855,64 @@ export class Game {
         const sick = list.some(c => c.plague > 0);
         if (!sick && worst.stress > 0.6 && Math.random() < mean * 0.5) {
             this.disasters.plague({ creature: worst, natural: true });
+        }
+    }
+
+    // Storms tear trees from the shore. Now and then a Nome clings to the driftwood and is
+    // carried to another island. This is how founders reach the remote island.
+    checkDrift() {
+        const w = this.weather.now;
+        const storm = (w.wind || 0) * 0.7 + (w.flood || 0) + (w.rain || 0) * 0.25;
+        if (storm < 0.45 || this.creatures.length < 2 || Math.random() > 0.45 * Math.min(1.6, storm)) return;
+        const world = this.world, isl = world.islands(), s = world.size;
+        const coast = new Map();
+        for (const t of world.tiles) {
+            const id = isl.ids[t.i];
+            if (id < 0 || isl.sizes[id] < 6 || t.fire > 0 || world.heat[t.i] > 0.1) continue;
+            let wet = false;
+            for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                const n = world.get(t.x + dx, t.z + dz);
+                if (n && n.biome === B.WATER) { wet = true; break; }
+            }
+            if (!wet) continue;
+            if (!coast.has(id)) coast.set(id, []);
+            coast.get(id).push(t);
+        }
+        if (coast.size < 2) return;
+        // A Nome on a wooded or sandy shore gets swept off.
+        const near = this.creatures.filter(c => {
+            if (c.dead || c.dragged || c.action === 'raft' || !c.adult) return false;
+            const t = world.tileAt(c.x, c.z);
+            return t && coast.has(isl.ids[t.i]) && coast.get(isl.ids[t.i]).includes(t);
+        });
+        if (!near.length) return;
+        const c = near[Math.floor(Math.random() * near.length)];
+        const from = isl.ids[world.tileAt(c.x, c.z).i];
+        const others = [...coast.keys()].filter(id => id !== from);
+        const to = others[Math.floor(Math.random() * others.length)];
+        const shore = coast.get(to);
+        // The current carries it to the closest point of that island.
+        let target = shore[0], best = Infinity;
+        for (const t of shore) {
+            const d = Math.hypot(t.x - c.x, t.z - c.z) + Math.random() * 3;
+            if (d < best) { best = d; target = t; }
+        }
+        if (best > s) return;
+        const route = world.seaPath(world.tileAt(c.x, c.z), target);
+        if (!route) return;
+        // A big tree can carry a few Nomes that huddled next to it.
+        const crew = [c, ...near.filter(o => o !== c && Math.hypot(o.x - c.x, o.z - c.z) < 2.5).slice(0, Math.random() < 0.6 ? 2 : 0)];
+        crew.forEach(o => o.startRaft(route));
+        this.stats.drift.out += crew.length;
+        this.log(crew.length > 1 ? `A storm washed ${crew.length} Nomes out to sea on a drifting tree.` : `A storm washed ${c.name} out to sea on driftwood.`, 'world');
+    }
+
+    onDriftLanded(c) {
+        this.stats.drift.landed++;
+        this.completeGoal('castaway');
+        if (this.time - (this.driftLogT ?? -99) > 6) {
+            this.driftLogT = this.time;
+            this.log(`${c.name} drifted ashore on another island.`, 'world');
         }
     }
 

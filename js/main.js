@@ -6,6 +6,7 @@ import { setupInput } from './input.js';
 import { Sky } from './sky.js';
 import { setNightGlow } from './body.js';
 import { StatsView } from './stats.js';
+import { loadRun } from './runs.js';
 import { SIM_STEP } from './config.js';
 import { randomSeed, clamp } from './rng.js';
 
@@ -202,12 +203,35 @@ const actions = {
     showStats() {
         if (!game.world) return;
         state.statsFrom = state.overlay;
+        state.statsBack = false;
         state.overlay = true;
         stats.show();
     },
     closeStats() {
         stats.hide();
+        // Opened from the record board: go back to it.
+        if (state.statsBack) {
+            state.statsBack = false;
+            ui.showRecords();
+            return;
+        }
         state.overlay = !!state.statsFrom;
+    },
+    // A row on the record board: the live run shows live numbers, others their saved copy.
+    showRun(id) {
+        const live = game.run && game.world && !game.extinct && game.run.id === id;
+        const run = live ? null : loadRun(id);
+        if (!live && !run) return;
+        const fromRecords = !document.getElementById('records').classList.contains('hidden');
+        if (fromRecords) {
+            ui.hideRecords();
+            state.statsBack = true;
+        } else {
+            state.statsBack = false;
+            state.statsFrom = state.overlay;
+            state.overlay = true;
+        }
+        stats.show(run);
     },
     // From the notables tab: close the window, select the Nome and follow it.
     showNome(id) {
@@ -252,6 +276,10 @@ function start(reframe = true) {
 
 const ui = new UI(game, actions);
 const stats = new StatsView(game, actions);
+document.addEventListener('click', e => {
+    const b = e.target.closest('[data-run]');
+    if (b) actions.showRun(b.dataset.run);
+});
 ui.setMode(state.mode);
 const input = setupInput({ renderer, camera, controls, scene, game, actions, state });
 ui.setTool(state.tool);

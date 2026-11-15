@@ -90,7 +90,7 @@ export const GENES = {
     fur: { label: 'Fur', min: 0, max: 1, effect: 'Warm in cold and snow. Hot in summer, and wet fur in rain stops warming.' },
     pigment: { label: 'Skin tone', min: 0, max: 1, effect: 'Dark skin soaks up sunshine, light skin reflects it but stands out to hawks on green ground.' },
     nocturnal: { label: 'Night life', min: 0, max: 1, effect: 'Night Nomes see in the dark, drink moonflower nectar, dodge the midday heat and the hawks. They sleep by day.' },
-    webbing: { label: 'Webbed feet', min: 0, max: 1, effect: 'Swims to other islands, grazes seaweed and dives away from hawks. A little slower on land.' },
+    webbing: { label: 'Webbed feet', min: 0, max: 1, effect: 'Swims over 45%. Better feet cross deeper water, graze seaweed and dive away from hawks. A little slower on land.' },
     curiosity: { label: 'Curiosity', min: 0, max: 1, effect: 'Roams far and finds new food. Wastes energy walking.' },
     litter: { label: 'Twins', min: 0, max: 1, effect: 'Chance of twins. Each birth costs the parents more, children start weaker.' },
     pickiness: { label: 'Pickiness', min: 0, max: 1, effect: 'Only pairs with similar colors, but raises stronger children.' },
@@ -109,7 +109,9 @@ export const GENES = {
     vigilance: { label: 'Alertness', min: 0, max: 1, effect: 'Looks up while eating and spots hawks and lurkers. Every meal takes longer.' },
     care: { label: 'Parental care', min: 0, max: 1, effect: 'Parents guard and feed their young. Children start strong, parents lose time and food.' },
     builder: { label: 'Building drive', min: 0, max: 1, effect: 'Builds dams into shallow water and plants seeds. Work takes time away from eating.' },
-    immunity: { label: 'Immunity', min: 0, max: 1, effect: 'Shrugs off plague. A strong immune system costs energy.' }
+    immunity: { label: 'Immunity', min: 0, max: 1, effect: 'Shrugs off plague. A strong immune system costs energy.' },
+    lungs: { label: 'Lungs', min: 0, max: 1, effect: 'Holds breath longer, so swimmers cross deeper and longer straits. Big lungs cost energy.' },
+    homing: { label: 'Island loyalty', min: 0, max: 1, effect: 'Stays on its own island and avoids risky swims. Loyal Nomes also stay when home gets crowded or bare.' }
 };
 
 export const legCount = v => (v < 0.3 ? 2 : v < 0.78 ? 4 : 6);
@@ -164,6 +166,8 @@ export const GOALS = [
     { id: 'gen10', label: 'Reach generation 12' },
     { id: 'sixlegs', label: 'Evolve a six-legged Nome' },
     { id: 'swimmer', label: 'Evolve a swimmer (webbed feet over 70%)' },
+    { id: 'castaway', label: 'A Nome drifts to another island on driftwood' },
+    { id: 'remote', label: 'Settle the remote island with 5 Nomes' },
     { id: 'night', label: 'Evolve a night walker (night life over 70%)' },
     { id: 'pop100', label: 'Grow to 100 Nomes at once' },
     { id: 'poison', label: 'Evolve poison tolerance over 70%' },

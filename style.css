@@ -825,11 +825,13 @@ details[open] > summary::before { transform: rotate(45deg); }
 
 .tab.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 
+#stats { z-index: 22; }
+
 ol.records { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 
 ol.records li {
     display: grid;
-    grid-template-columns: 26px 1fr auto 56px;
+    grid-template-columns: 26px 1fr auto 56px 32px;
     align-items: center;
     gap: 8px;
     padding: 7px 8px;
@@ -843,6 +845,8 @@ ol.records li:first-child .rk { color: var(--accent); font-weight: 700; }
 ol.records .nm { display: flex; flex-direction: column; min-width: 0; }
 ol.records .nm b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 ol.records small { color: var(--muted); font-size: 11px; }
+ol.records .rec-stats { width: 32px; height: 32px; }
+ol.records .rec-stats svg { width: 16px; height: 16px; }
 ol.records .sc { text-align: right; font-family: var(--display); font-size: 17px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
 
 .score-box { display: grid; gap: 2px; margin: 0 0 18px; padding: 12px 14px; border-radius: 12px; background: rgba(240, 176, 74, 0.1); }
@@ -855,7 +859,7 @@ ol.records .sc { text-align: right; font-family: var(--display); font-size: 17px
     #timebar { gap: 6px; padding: 6px 8px; }
     .speed button { min-width: 30px; }
     .season div { display: none; }
-    ol.records li { grid-template-columns: 22px 1fr 48px; }
+    ol.records li { grid-template-columns: 22px 1fr 48px 32px; }
     ol.records .st { display: none; }
     .modes { grid-template-columns: 1fr; }
 }

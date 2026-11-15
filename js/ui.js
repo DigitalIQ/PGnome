@@ -1,6 +1,7 @@
 import { GENES, GOALS, BIOMES, MAX_POP, MODES, legCount, eyeCount, patternName } from './config.js';
 import { isWalkable } from './world.js';
 import { loadRecords } from './scores.js';
+import { storedRunIds } from './runs.js';
 import { describeBody, accentColor } from './body.js';
 
 const WEATHER_ICONS = {
@@ -175,12 +176,19 @@ export class UI {
     recordRows(list, limit, highlight) {
         if (!list.length) return '<p class="hint">No records yet. Keep a population alive for a while.</p>';
         const date = ts => new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+        // Runs with saved statistics get a button. The run being played shows live numbers.
+        const runs = storedRunIds();
+        const live = this.game.run && this.game.world && !this.game.extinct ? this.game.run.id : null;
+        const statBtn = r => (runs.has(r.id) || r.id === live
+            ? `<button class="icon-btn rec-stats" data-run="${esc(r.id)}" title="Statistics of this run" aria-label="Statistics of ${esc(r.name)}"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></button>`
+            : '<span class="rec-stats none" title="No statistics saved for this run"></span>');
         return `<ol class="records">${list.slice(0, limit).map((r, i) => `
             <li class="${r.id === highlight ? 'me' : ''}">
                 <span class="rk">${i + 1}</span>
                 <span class="nm"><b>${esc(r.name)}</b><small>${r.mode === 'living' ? 'Living' : 'Classic'} · ${date(r.date)}${r.ended ? '' : ' · alive'}</small></span>
                 <span class="st"><small>${r.years.toFixed(1)} y · gen ${r.gen} · peak ${r.peak}</small></span>
                 <span class="sc">${r.score}</span>
+                ${statBtn(r)}
             </li>`).join('')}</ol>`;
     }
 

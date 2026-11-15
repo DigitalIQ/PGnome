@@ -12,7 +12,7 @@ const int = (v, min, max, def = min) => Math.round(num(v, min, max, def));
 const str = (v, max, re = /^[\w .,'&-]*$/) => (typeof v === 'string' && v.length <= max && re.test(v) ? v : '');
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const goalIds = new Set(GOALS.map(g => g.id));
-const NAME = /^[A-Za-z]{1,24}$/;
+export const NAME = /^[A-Za-z]{1,24}$/;
 
 function cleanGenes(g) {
     const out = {};
@@ -47,7 +47,20 @@ function cleanNumberMap(m, maxKeys = 40, maxVal = 1e9) {
     return out;
 }
 
-function cleanStats(s) {
+export function cleanLongHistory(list, max = 1000) {
+    return Array.isArray(list) ? list.slice(-max).filter(isObj).map(h => ({
+        t: num(h.t, 0, 1e9), pop: int(h.pop, 0, MAX_POP), land: int(h.land, 0, 4096), hawks: int(h.hawks, 0, 20),
+        sat: int(h.sat, 0, MAX_POP), water: int(h.water, 0, MAX_POP), far: int(h.far, 0, MAX_POP), rem: int(h.rem, 0, MAX_POP),
+        g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : [],
+        lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096), stress: num(h.stress, 0, 1.5, 0),
+        hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
+        lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
+        pg: Array.isArray(h.pg) ? h.pg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
+        prowlers: int(h.prowlers, 0, 20), species: int(h.species, 0, 100)
+    })) : [];
+}
+
+export function cleanStats(s) {
     if (!isObj(s)) return {};
     const years = Array.isArray(s.years) ? s.years.slice(-200).filter(isObj).map(e => ({
         y: int(e.y, 1, 1e6, 1), births: int(e.births, 0, 1e7), deaths: int(e.deaths, 0, 1e7),
@@ -66,7 +79,7 @@ function cleanStats(s) {
         food: sub(food, ['plants', 'greens', 'fruit', 'nuts', 'shroom', 'roots', 'seaweed', 'nectar', 'fed']),
         poison: sub(s.poison, ['cases', 'spat']), plague: sub(s.plague, ['cases']),
         work: sub(s.work, ['burrows', 'dams', 'planted', 'drained']),
-        landMade: int(s.landMade, 0, 1e9), fights: int(s.fights, 0, 1e9),
+        landMade: int(s.landMade, 0, 1e9), fights: int(s.fights, 0, 1e9), drift: sub(s.drift, ['out', 'landed']),
         disasters: Array.isArray(s.disasters) ? s.disasters.slice(-60).filter(e => isObj(e) && DISASTERS[e.kind]).map(e => ({
             y: int(e.y, 1, 1e6, 1), kind: e.kind, before: int(e.before, 0, MAX_POP), after: e.after == null ? null : int(e.after, 0, MAX_POP)
         })) : [],
@@ -105,16 +118,7 @@ export function cleanSave(d) {
     const history = Array.isArray(d.history) ? d.history.slice(-240).filter(isObj).map(h => ({
         t: num(h.t, 0, 1e9), pop: int(h.pop, 0, MAX_POP), s: int(h.s, 0, 3), land: int(h.land, 0, 4096)
     })) : [];
-    const longHistory = Array.isArray(d.longHistory) ? d.longHistory.slice(-1000).filter(isObj).map(h => ({
-        t: num(h.t, 0, 1e9), pop: int(h.pop, 0, MAX_POP), land: int(h.land, 0, 4096), hawks: int(h.hawks, 0, 20),
-        sat: int(h.sat, 0, MAX_POP), water: int(h.water, 0, MAX_POP),
-        g: Array.isArray(h.g) ? h.g.slice(0, 40).map(v => (v === null ? null : num(v, -1, 400, 0))) : [],
-        lurkers: int(h.lurkers, 0, 20), tox: num(h.tox, 0, 1, 0), burrows: int(h.burrows, 0, 4096), stress: num(h.stress, 0, 1.5, 0),
-        hg: Array.isArray(h.hg) ? h.hg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
-        lg: Array.isArray(h.lg) ? h.lg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
-        pg: Array.isArray(h.pg) ? h.pg.slice(0, 8).map(v => num(v, 0, 2000, 0)) : null,
-        prowlers: int(h.prowlers, 0, 20), species: int(h.species, 0, 100)
-    })) : [];
+    const longHistory = cleanLongHistory(d.longHistory);
     const predators = Array.isArray(d.predators) ? d.predators.slice(0, 20).filter(isObj).map(p => {
         const table = p.kind === 'hawk' ? HAWK_GENES : p.kind === 'lurker' ? LURKER_GENES : p.kind === 'prowler' ? PROWLER_GENES : null;
         if (!table) return null;

@@ -171,20 +171,31 @@ export class World {
     get center() { return (this.size - 1) / 2; }
 
     // Raw elevation (e) and wetness (m) per tile, both 0..1. Deterministic per seed.
-    // A main island with two or three smaller islands around it. Shallow channels
-    // separate them, so only swimmers cross, unless the sea falls on a living island.
+    // A main island with smaller islands in the corners of the map:
+    //   near    behind a shallow strait every swimmer can cross,
+    //   far     behind a deep strait only strong swimmers with good lungs cross,
+    //   remote  out in deep sea. Only driftwood in a storm or a falling sea gets Nomes there.
     satellites() {
+        if (this.size < 40) return [];
         const rnd = mulberry32(this.seed + 4242);
         const c = (this.size - 1) / 2;
-        const n = this.size >= 40 ? 2 + (rnd() < 0.55 ? 1 : 0) : 0;
-        const start = rnd() * Math.PI * 2;
-        const out = [];
-        for (let k = 0; k < n; k++) {
-            const a = start + (k / n) * Math.PI * 2 + (rnd() - 0.5) * 0.7;
-            const r = 3.4 + rnd() * 1.6;
-            const dist = 14.2 + rnd() * 1.2;
-            out.push({ x: c + Math.cos(a) * dist, z: c + Math.sin(a) * dist, r, peak: 0.14 + rnd() * 0.08 });
+        const kinds = ['near', 'far', 'remote', rnd() < 0.55 ? 'near' : null];
+        for (let i = kinds.length - 1; i > 0; i--) {
+            const j = Math.floor(rnd() * (i + 1));
+            [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
         }
+        const turn = Math.floor(rnd() * 4);
+        const out = [];
+        kinds.forEach((kind, k) => {
+            if (!kind) return;
+            const a = Math.PI / 4 + ((k + turn) % 4) * Math.PI / 2 + (rnd() - 0.5) * 0.35;
+            const spec = kind === 'near' ? { r: [3.4, 5], d: [14.2, 15.4], peak: [0.14, 0.22], strait: SEA - 0.05 }
+                : kind === 'far' ? { r: [3, 4], d: [18, 19], peak: [0.13, 0.2], strait: SEA - 0.082 }
+                    : { r: [2.5, 3.1], d: [20.5, 21.5], peak: [0.12, 0.18], strait: null };
+            const pick = ([lo, hi]) => lo + rnd() * (hi - lo);
+            const r = pick(spec.r), dist = pick(spec.d);
+            out.push({ kind, x: c + Math.cos(a) * dist, z: c + Math.sin(a) * dist, r, peak: pick(spec.peak), strait: spec.strait });
+        });
         return out;
     }
 
@@ -212,13 +223,17 @@ export class World {
                     const dt = Math.hypot(x - sat.x, z - sat.z);
                     // A ring of shallow water keeps each satellite apart...
                     if (dt > sat.r * 0.95 && dt < sat.r + 2.4) h = clamp(h, SEA - 0.065, SEA - 0.022);
-                    // ...and a shallow strait leads to the main island, so swimmers can cross.
-                    if (dt > sat.r * 0.95 && segDist(x, z, c, c, sat.x, sat.z) < 2.2 && h < SEA - 0.065) h = SEA - 0.058 + (noise - 0.5) * 0.02;
+                    // ...and a strait leads to the main island. Its depth decides who can cross.
+                    if (sat.strait != null && dt > sat.r * 0.95 && segDist(x, z, c, c, sat.x, sat.z) < 2.2 && h < SEA - 0.03) {
+                        h = Math.min(h, sat.strait + (noise - 0.5) * 0.012);
+                        if (h < sat.strait - 0.01) h = sat.strait - 0.006;
+                    }
                 }
                 e[i] = h;
                 m[i] = wetness(nx * 3 + 40, nz * 3 + 40, 3);
-                // The map edge always stays sea, also when the land rises.
-                cap[i] = 1.2 - Math.max(0, dist / c - 0.86) * 5;
+                // The map edge always stays sea, also when the land rises. The corners hold islands.
+                const edge = Math.max(Math.abs(x - c), Math.abs(z - c)) / c;
+                cap[i] = 1.2 - Math.max(0, edge - 0.9) * 10;
             }
         }
         return { e, m, cap };
@@ -241,7 +256,7 @@ export class World {
             else if (m[i] < 0.36) biome = B.SAND;
             const t = {
                 i, x, z, biome, height: 0, rh: 0, food: 0, jitter: rand(),
-                elev: e[i], elev0: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0, trail: 0, fert: 0
+                elev: e[i], elev0: e[i], elevBase: e[i], wet: m[i], wet0: m[i], veg: clamp((m[i] - 0.3) * 2.4, 0, 1), pend: -1, pendN: 0, trail: 0, fert: 0
             };
             t.height = t.rh = this.heightFor(t, SEA);
             t.food = this.capFor(t) * (0.5 + rand() * 0.5);
@@ -262,7 +277,7 @@ export class World {
             const t = {
                 i, x, z, biome, height, rh: height, food, jitter: rand(),
                 elev: row[3] ?? e[i], wet: row[4] ?? m[i], veg: row[5] ?? clamp((m[i] - 0.3) * 2.4, 0, 1),
-                elev0: row[6] ?? e[i], wet0: row[7] ?? m[i], pend: -1, pendN: 0
+                elev0: row[6] ?? e[i], wet0: row[7] ?? m[i], elevBase: e[i], pend: -1, pendN: 0
             };
             if (biome === B.WATER && height >= WATER_H) t.height = t.rh = this.heightFor(t, SEA);
             this.initExtras(t, row[12] ?? 0.05, rand());
@@ -418,10 +433,15 @@ export class World {
         stemGeo.translate(0, 0.04, 0);
         this.shrooms = make(mergeShroom(capGeo, stemGeo), new THREE.MeshStandardMaterial({ roughness: 0.7 }));
         for (let i = 0; i < n; i++) this.shrooms.setColorAt(i, shroomColor);
-        const holeGeo = new THREE.CircleGeometry(0.16, 10);
+        // A burrow is a mound of dug-out earth with a dark entrance on top.
+        const moundGeo = new THREE.SphereGeometry(0.27, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
+        moundGeo.scale(1, 0.42, 1);
+        this.mounds = make(moundGeo, new THREE.MeshStandardMaterial({ color: 0x8a6036, roughness: 1 }));
+        this.mounds.castShadow = false;
+        const holeGeo = new THREE.CircleGeometry(0.12, 10);
         holeGeo.rotateX(-Math.PI / 2);
-        holeGeo.translate(0, 0.012, 0);
-        this.burrows = make(holeGeo, new THREE.MeshBasicMaterial({ color: 0x2a1d12 }));
+        holeGeo.translate(0, 0.115, 0);
+        this.burrows = make(holeGeo, new THREE.MeshBasicMaterial({ color: 0x1a120a }));
         this.burrows.castShadow = false;
         const trailGeo = new THREE.PlaneGeometry(1, 1);
         trailGeo.rotateX(-Math.PI / 2);
@@ -539,7 +559,8 @@ export class World {
         place(this.shrooms, t.shroom, 0.04, -0.25 + j * 0.2, 0.25 - j * 0.1, ss, ss, ss, tmpC);
         const water = t.biome === B.WATER;
         const bs = 0.5 + t.burrow * 0.6;
-        place(this.burrows, water ? 0 : t.burrow, 0.15, 0.2 - j * 0.4, -0.1, bs, 1, bs * 0.8, null);
+        place(this.mounds, water ? 0 : t.burrow, 0.15, 0.2 - j * 0.4, -0.1, bs, 0.6 + t.burrow * 0.6, bs, null);
+        place(this.burrows, water ? 0 : t.burrow, 0.15, 0.2 - j * 0.4, -0.1, bs, 0.6 + t.burrow * 0.6, bs, null);
         place(this.trails, water ? 0 : t.trail, 0.18, 0, 0, 0.96, 1, 0.96, null);
         const ds = Math.min(1, t.work);
         place(this.dams, water ? t.work : 0, 0.05, 0, 0, 0.9, 0.2 + ds * (WATER_H - t.rh + 0.05) * 5, 0.9, null);
@@ -547,7 +568,7 @@ export class World {
 
     updatePlants() {
         for (const t of this.tiles) this.setBush(t);
-        for (const im of [this.bushes, this.flowers, this.fruits, this.nutMesh, this.shrooms, this.burrows, this.trails, this.dams]) {
+        for (const im of [this.bushes, this.flowers, this.fruits, this.nutMesh, this.shrooms, this.burrows, this.mounds, this.trails, this.dams]) {
             im.instanceMatrix.needsUpdate = true;
             if (im.instanceColor) im.instanceColor.needsUpdate = true;
         }
@@ -592,7 +613,7 @@ export class World {
                 t.fruit = t.nuts = t.shroom = 0;
                 t.burrow = 0;
                 t.trail = 0;
-                if (b === B.WATER) t.roots = 0;
+                if (b === B.WATER) { t.roots = 0; this.scour(t, step); }
                 continue;
             }
             const fc = FRUIT_CAP[b] * (1 + t.fert * 0.4);
@@ -676,7 +697,7 @@ export class World {
     }
 
     markDecor() {
-        for (const im of [this.burrows, this.trails, this.dams, this.fruits, this.nutMesh, this.shrooms]) {
+        for (const im of [this.burrows, this.mounds, this.trails, this.dams, this.fruits, this.nutMesh, this.shrooms]) {
             im.instanceMatrix.needsUpdate = true;
             if (im.instanceColor) im.instanceColor.needsUpdate = true;
         }
@@ -886,6 +907,30 @@ export class World {
         return changed;
     }
 
+    // Seaweed holds the sand. Where swimmers graze it bare, the current washes the seabed
+    // out and the strait gets deeper, until weaker swimmers can no longer cross.
+    // Lush beds catch sand again, and bare deep water silts up very slowly.
+    scour(t, step) {
+        if (t.elevBase == null || t.elevBase < SEA - 0.12) return;
+        const lush = t.food / KELP_CAP;
+        let d;
+        if (t.height >= 0.12 && lush < 0.35) d = -0.00008 * step;
+        else if (lush > 0.6) d = 0.000025 * step;
+        else if (t.height < 0.12) d = 0.00001 * step;
+        else return;
+        const lo = t.elevBase - 0.035;
+        const e0 = clamp(t.elev0 + d, lo, t.elevBase);
+        if (e0 === t.elev0) return;
+        t.elev0 = e0;
+        t.elev = clamp(t.elev + d, lo, Math.max(t.elevBase, t.elev));
+        const h = this.heightFor(t, this.seaNow ?? SEA);
+        if (Math.abs(h - t.height) > 0.004) {
+            t.height = h;
+            this.animating.add(t);
+            this.placeTile(t);
+        }
+    }
+
     // Lightning sets a forest on fire. It grows back as meadow.
     burn(t) {
         if (!t || t.biome !== B.FOREST) return false;
@@ -926,13 +971,36 @@ export class World {
         return this.islandCache;
     }
 
-    stats() {
-        let land = 0, peak = 0, deep = 0;
-        for (const t of this.tiles) {
-            if (t.biome === B.WATER) deep = Math.max(deep, WATER_H - t.height);
-            else { land++; peak = Math.max(peak, t.height); }
+    // Which kind of island each land mass is: the main island, or a near, far or remote one.
+    // New land from lava or a split by an earthquake counts as 'other'.
+    islandKinds() {
+        const isl = this.islands();
+        if (isl.kinds) return isl.kinds;
+        const kinds = new Map([[isl.main, 'main']]);
+        for (const sat of this.sats || (this.sats = this.satellites())) {
+            let best = -1, bd = Infinity;
+            const r = Math.ceil(sat.r);
+            for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+                const t = this.get(Math.round(sat.x) + dx, Math.round(sat.z) + dz);
+                if (!t || isl.ids[t.i] < 0) continue;
+                const d = Math.hypot(t.x - sat.x, t.z - sat.z);
+                if (d < bd) { bd = d; best = t.i; }
+            }
+            if (best >= 0 && !kinds.has(isl.ids[best])) kinds.set(isl.ids[best], sat.kind);
         }
-        return { land, peak, deep };
+        isl.kinds = kinds;
+        return kinds;
+    }
+
+    stats() {
+        let land = 0, peak = 0, deep = 0, scoured = 0;
+        for (const t of this.tiles) {
+            if (t.biome === B.WATER) {
+                deep = Math.max(deep, WATER_H - t.height);
+                if (t.elevBase - t.elev0 > 0.008) scoured++;
+            } else { land++; peak = Math.max(peak, t.height); }
+        }
+        return { land, peak, deep, scoured };
     }
 
     feed(t) {
@@ -979,14 +1047,15 @@ export class World {
 
     // Breadth-first search over walkable tiles. The start tile may be water,
     // so a Nome dropped into a lake can still find the shore.
-    // Swimmers may cross shallow water. Deep water stops everyone.
-    passable(t, swim = false) {
+    // swim is the lowest tile height a swimmer can cross (0 for non-swimmers).
+    // Strong swimmers reach deeper straits. Deep sea stops everyone.
+    passable(t, swim = 0) {
         if (!t) return false;
         if (BIOMES[t.biome].walkable) return true;
-        return swim && t.biome === B.WATER && t.height >= 0.12;
+        return swim > 0 && t.biome === B.WATER && t.height >= swim;
     }
 
-    bfs(start, maxDepth, swim = false) {
+    bfs(start, maxDepth, swim = 0) {
         const gen = ++this.bfsGen;
         const q = this.bfsQueue;
         let head = 0, tail = 0;
@@ -1020,6 +1089,26 @@ export class World {
     }
 
     reached(i) { return this.bfsStamp[i] === this.bfsGen; }
+
+    // A route over open water only, from the shore tile a to the shore tile b. Driftwood
+    // follows it, so it never crosses land. Returns the tiles to pass, ending with b.
+    seaPath(a, b) {
+        const n = this.size * this.size, prev = new Int32Array(n).fill(-2), q = [];
+        const around = (t, f) => { for (const [dx, dz] of DIRS) { const u = this.get(t.x + dx, t.z + dz); if (u && u.biome === B.WATER) f(u); } };
+        around(a, u => { if (prev[u.i] === -2) { prev[u.i] = -1; q.push(u.i); } });
+        const goal = new Set();
+        around(b, u => goal.add(u.i));
+        for (let h = 0; h < q.length; h++) {
+            const i = q[h];
+            if (goal.has(i)) {
+                const path = [b];
+                for (let k = i; k >= 0; k = prev[k]) path.push(this.tiles[k]);
+                return path.reverse();
+            }
+            around(this.tiles[i], u => { if (prev[u.i] === -2) { prev[u.i] = i; q.push(u.i); } });
+        }
+        return null;
+    }
 
     pathTo(i) {
         const path = [];

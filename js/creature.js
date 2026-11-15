@@ -9,13 +9,19 @@ import { buildBody, baseColor } from './body.js';
 const DEFAULTS = {
     legs: 0.5, bodyLen: 1, plump: 0.5, eyes: 0.5, horns: 0.25, tail: 0.5, pattern: 0.2,
     metabolism: 0.5, fur: 0.3, pigment: 0.5, nocturnal: 0.15, webbing: 0.15, curiosity: 0.4, litter: 0.2, pickiness: 0.3,
-    jaw: 0.3, claws: 0.25, toxinRes: 0.2, palate: 0.3, vigilance: 0.3, care: 0.3, builder: 0.2, immunity: 0.3
+    jaw: 0.3, claws: 0.25, toxinRes: 0.2, palate: 0.3, vigilance: 0.3, care: 0.3, builder: 0.2, immunity: 0.3, lungs: 0.25, homing: 0.3
 };
 const DIST_GENES = Object.keys(GENES).filter(k => k !== 'hue' && k !== 'hue2');
 export const SPECIES_DIST = 0.17;
 // What each job is called while a Nome does it.
 const JOB_TEXT = { burrow: 'Digging a burrow', dam: 'Building a dam', plant: 'Planting seeds', drain: 'Digging a ditch' };
 const JOB_GO = { burrow: 'Looking for a place to dig', dam: 'Heading to the shore to build', plant: 'Carrying seeds', drain: 'Heading into the marsh to dig' };
+
+const LOG_GEO = new THREE.CylinderGeometry(0.09, 0.1, 0.9, 7);
+const LOG_MAT = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 0.95 });
+
+// Swimmers cross water down to this tile height (0 = cannot swim). Better feet and lungs reach deeper.
+export const swimDepth = g => (g.webbing > 0.45 ? 0.15 - (g.webbing - 0.45) / 0.55 * 0.05 - g.lungs * 0.05 : 0);
 
 let nextId = 1;
 export const setNextId = n => { nextId = Math.max(nextId, n); };
@@ -32,7 +38,7 @@ export function speciesTemplate(rnd) {
         metabolism: r(0.3, 0.7), fur: r(0.1, 0.6), pigment: r(0.2, 0.8), nocturnal: r(0.05, 0.4),
         webbing: r(0.1, 0.5), curiosity: r(0.2, 0.7), litter: r(0.05, 0.4), pickiness: r(0.1, 0.5),
         jaw: r(0.1, 0.6), claws: r(0.05, 0.55), toxinRes: r(0.05, 0.4), palate: r(0.1, 0.6), vigilance: r(0.1, 0.6),
-        care: r(0.1, 0.6), builder: r(0.05, 0.5), immunity: r(0.1, 0.5)
+        care: r(0.1, 0.6), builder: r(0.05, 0.5), immunity: r(0.1, 0.5), lungs: r(0.05, 0.45), homing: r(0.1, 0.5)
     };
 }
 
@@ -172,14 +178,14 @@ export class Creature {
             lifespan: g.lifespan * (1.12 - 0.24 * g.metabolism),
             burnMul: 0.78 + 0.44 * g.metabolism,
             heal: 0.7 + 0.8 * g.metabolism,
-            swimmer: g.webbing > 0.45,
+            swimmer: swimDepth(g),
             fogEye: eyes === 1 ? 1.35 : eyes === 3 ? 0.45 : 1,
             nightEye: eyes === 3 ? 1.15 : 1,
             attract: (g.pattern >= 0.4 ? 0.5 : 0) + Math.max(0, g.horns - 0.5) * 1.4 + Math.max(0, lenN - 0.6) * 0.3,
             baseBurn: 0.45 + 0.5 * Math.pow(g.size, 1.5) + 0.03 * g.sight + (g.lifespan - 90) * 0.0015
                 + (legs - 2) / 2 * 0.05 + (eyes - 2) * 0.03 + Math.max(0, g.horns - 0.5) * 0.2 + lenN * 0.12
                 + (g.pattern >= 0.4 ? 0.03 : 0) + g.fur * 0.04
-                + g.jaw * 0.05 + g.claws * 0.03 + g.toxinRes * 0.08 + g.immunity * 0.07 + g.vigilance * 0.02 + g.palate * 0.02
+                + g.jaw * 0.05 + g.claws * 0.03 + g.toxinRes * 0.08 + g.immunity * 0.07 + g.vigilance * 0.02 + g.palate * 0.02 + g.lungs * 0.06
         };
     }
 
@@ -293,6 +299,7 @@ export class Creature {
         const w = game.weather.now;
         this.age += dt;
         this.cooldown -= dt;
+        if (this.action === 'raft') { this.drift(dt); return; }
 
         const tile = world.tileAt(this.x, this.z);
         if (!tile) { game.kill(this, 'got lost'); return; }
@@ -342,7 +349,9 @@ export class Creature {
         }
         if (d > 0.8) this.health -= (d - 0.8) * 10 * dt;
         // Webbed feet turn water from deadly into a place to feed.
-        const drown = inWater ? 8 * Math.pow(clamp((0.85 - g.webbing) / 0.85, 0, 1), 1.5) * (1 - g.tail * 0.15) : 0;
+        // Lungs hold the breath. Deep water wears every swimmer down faster.
+        const deep = inWater ? clamp((0.17 - tile.height) * 6, 0, 0.8) : 0;
+        const drown = inWater ? (8 * Math.pow(clamp((0.85 - g.webbing) / 0.85, 0, 1), 1.5) + deep * 2.5) * (1 - g.tail * 0.15) * (1 - g.lungs * 0.55) : 0;
         if (inWater) this.health -= drown * dt;
         if (w.hail > 0.3 && !shelter) this.health -= 1.2 * w.hail * (1 - g.plump * 0.3) * dt;
         // Poison wears off with a fast metabolism and a strong liver.
@@ -414,6 +423,9 @@ export class Creature {
         this.thinkTimer = 1.3 * (1.25 - 0.5 * g.metabolism) * (1.1 - 0.3 * g.curiosity) * rand(0.8, 1.2);
         const start = world.tileAt(this.x, this.z);
         const swim = t.swimmer;
+        // Island loyalty: on most turns a loyal Nome ignores places on other islands.
+        if (isWalkable(start)) this.home = world.islands().ids[start.i];
+        this.stay = (this.home ?? -1) >= 0 && Math.random() < g.homing * 0.92;
         this.newOffset();
         this.sightNow = g.sight * this.sightFactor();
         const sight = this.sightNow;
@@ -450,7 +462,7 @@ export class Creature {
         }
 
         if (!isWalkable(start)) {
-            const swimming = swim && start.biome === B.WATER && start.height >= 0.12 && this.health > 55;
+            const swimming = swim && start.biome === B.WATER && start.height >= swim && this.health > 55;
             if (!swimming) {
                 const visited = world.bfs(start, 8, false);
                 for (const i of visited) {
@@ -481,7 +493,7 @@ export class Creature {
                 const tl = world.tiles[i];
                 far = i;
                 const f = this.tileValue(tl);
-                if (f < 0.15) continue;
+                if (f < 0.15 || this.foreign(i)) continue;
                 // Lurkers learned about by others keep wary Nomes away.
                 const score = Math.min(f, 1.8) - world.bfsDist[i] * 0.12 + tl.jitter * 0.05;
                 if (score > bestScore) { bestScore = score; best = tl; }
@@ -543,7 +555,7 @@ export class Creature {
         for (let k = 0; k < 7; k++) {
             const i = visited[Math.floor(Math.random() * visited.length)];
             const tl = world.tiles[i];
-            if (!isWalkable(tl)) continue;
+            if (!isWalkable(tl) || this.foreign(i)) continue;
             const c = game.climate(tl);
             const dT = Math.abs(c.temp - g.prefTemp);
             let score = -dT / 25 - Math.abs(c.moisture - g.prefMoisture) / 80 + Math.random() * 0.3 + Math.min(tl.food, 1) * 0.2
@@ -623,6 +635,13 @@ export class Creature {
         this.moving = true;
     }
 
+    // True when tile i lies on another island and this Nome wants to stay home right now.
+    foreign(i) {
+        if (!this.stay || i == null) return false;
+        const id = this.game.world.islands().ids[i];
+        return id >= 0 && id !== this.home;
+    }
+
     // Walks to a quieter place further away.
     leaveCrowd(start) {
         const world = this.game.world, swim = this.t.swimmer;
@@ -631,7 +650,7 @@ export class Creature {
         for (let k = 0; k < 10 && visited.length; k++) {
             const i = visited[Math.floor(Math.random() * visited.length)];
             const tl = world.tiles[i];
-            if (!isWalkable(tl) || tl.fire > 0 || world.heat[i] > 0.2) continue;
+            if (!isWalkable(tl) || tl.fire > 0 || world.heat[i] > 0.2 || this.foreign(i)) continue;
             let n = 0;
             for (const o of this.game.creatures) if (Math.abs(o.x - tl.x) < 3 && Math.abs(o.z - tl.z) < 3) n++;
             const s = n - world.bfsDist[i] * 0.05 - this.tileValue(tl) * 2;
@@ -926,6 +945,48 @@ export class Creature {
         this.status = `Courting ${p.name}`;
     }
 
+    // Washed out to sea: the log drifts slowly to another island. Nobody drowns on it.
+    startRaft(route) {
+        if (this.partner) this.stopCourting();
+        this.cancelPlans();
+        this.action = 'raft';
+        this.raftTo = route.slice();
+        this.raftOff = [(Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.3];
+        this.status = 'Drifting on driftwood';
+        this.moving = false;
+        if (!this.raftMesh) {
+            this.raftMesh = new THREE.Mesh(LOG_GEO, LOG_MAT);
+            this.raftMesh.rotation.x = Math.PI / 2;
+            this.raftMesh.position.y = 0.02;
+            this.raftMesh.castShadow = false;
+            this.root.add(this.raftMesh);
+        }
+    }
+
+    drift(dt) {
+        const route = this.raftTo;
+        if (!route || !route.length) { this.action = 'idle'; this.raftTo = null; return; }
+        const next = route[0];
+        const tx = next.x + this.raftOff[0], tz = next.z + this.raftOff[1];
+        const dx = tx - this.x, dz = tz - this.z, d = Math.hypot(dx, dz);
+        const sp = 0.8 * dt;
+        this.energy = Math.max(0, this.energy - 0.25 * dt);
+        if (d > sp) {
+            this.x += dx / d * sp;
+            this.z += dz / d * sp;
+            this.heading = Math.atan2(dx, dz);
+            return;
+        }
+        this.x = tx;
+        this.z = tz;
+        route.shift();
+        if (route.length) return;
+        this.raftTo = null;
+        this.action = 'idle';
+        this.thinkTimer = 0;
+        this.game.onDriftLanded(this);
+    }
+
     stopCourting() {
         const p = this.partner;
         this.partner = null;
@@ -991,7 +1052,9 @@ export class Creature {
     render(dt, time) {
         const world = this.game.world;
         const tile = world.tileAt(this.x, this.z);
-        let ground = tile ? (isWalkable(tile) ? tile.rh : WATER_H - 0.18) : 0;
+        const rafting = this.action === 'raft';
+        let ground = tile ? (isWalkable(tile) ? tile.rh : rafting ? WATER_H + 0.02 : WATER_H - 0.18) : 0;
+        if (this.raftMesh) this.raftMesh.visible = rafting;
         if (this.dragged) ground = Math.max(ground, 1) + 1.2;
         this.y = lerp(this.y, ground, Math.min(1, dt * (this.dragged ? 18 : 12)));
         this.root.position.set(this.x, this.y, this.z);
